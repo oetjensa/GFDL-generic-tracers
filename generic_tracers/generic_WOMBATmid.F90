@@ -3312,12 +3312,21 @@ module generic_WOMBATmid
     call g_tracer_add_param('Nox_fac', wombat%Nox_fac, 0.5)
 
     ! Facultative heterotrophic bacteria #1 maximum rate of uptake of POC [mmol C m-3 s-1]
+    ! if bac remin is turned off, kill off bac1
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('bac1_Vmax_poc', wombat%bac1_Vmax_poc, 6.7/86400.0)
+    if (do_bac_remin) then
+      call g_tracer_add_param('bac1_Vmax_poc', wombat%bac1_Vmax_poc, 6.7/86400.0)
+    else
+      call g_tracer_add_param('bac1_Vmax_poc', wombat%bac1_Vmax_poc, 0.0)
+    endif
 
     ! Facultative heterotrophic bacteria #1 maximum rate of uptake of NO3 [mmol N m-3 s-1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('bac1_Vmax_no3', wombat%bac1_Vmax_no3, 7.2/86400.0)
+    if (do_bac_remin) then
+      call g_tracer_add_param('bac1_Vmax_no3', wombat%bac1_Vmax_no3, 7.2/86400.0)
+    else
+      call g_tracer_add_param('bac1_Vmax_no3', wombat%bac1_Vmax_no3, 0.0)
+    endif 
 
     ! Facultative heterotrophic bacteria #1 maximum rate of uptake of dFe [mmol Fe m-3 s-1]
     !-----------------------------------------------------------------------
@@ -6138,10 +6147,28 @@ module generic_WOMBATmid
       wombat%bac3pnh4(i,j,k) = wombat%bac3grow(i,j,k) * bac3_pnh4 * (1. - wombat%bac3_fanaer(i,j,k)) &
                                + wombat%bac3grow(i,j,k) * bac3_pnh4_ana * wombat%bac3_fanaer(i,j,k) ! [molN/kg/s]
 
-      ! Total loss of small and large particulate detritus by bacterial action
-      wombat%detremi(i,j,k) = wombat%poc1remi(i,j,k) * biodet / (biodet + biobdet + epsi)
-      wombat%bdetremi(i,j,k) = wombat%poc1remi(i,j,k) * biobdet / (biodet + biobdet + epsi)
+      if (do_bac_remin) then
+        ! Total loss of small and large particulate detritus by bacterial action
+        wombat%detremi(i,j,k) = wombat%poc1remi(i,j,k) * biodet / (biodet + biobdet + epsi)
+        wombat%bdetremi(i,j,k) = wombat%poc1remi(i,j,k) * biobdet / (biodet + biobdet + epsi)
+      else
+        !! Variable rates of remineralisation
+        wombat%reminr(i,j,k) = wombat%detlrem * fbc
 
+        !! remineralisation of POM --> DOM
+        if (wombat%f_det(i,j,k) > epsi) then
+          wombat%detremi(i,j,k) = wombat%reminr(i,j,k) / mmol_m3_to_mol_kg * wombat%f_det(i,j,k)**2.0 ! [molC/kg/s]
+        else
+          wombat%detremi(i,j,k) = 0.0
+        endif
+        if (wombat%f_bdet(i,j,k) > epsi) then
+          wombat%bdetremi(i,j,k) = wombat%reminr(i,j,k) / mmol_m3_to_mol_kg * wombat%f_bdet(i,j,k)**2.0 ! [molC/kg/s]
+        else
+          wombat%bdetremi(i,j,k) = 0.0
+        endif
+        ! if bac1 is turned off, we switch to the implicit remineralisation of detritus as doc source
+        wombat%doc1prod(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k)  ! [molC/kg/s]
+      endif
 
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
