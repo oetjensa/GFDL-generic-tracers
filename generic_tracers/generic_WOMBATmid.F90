@@ -131,7 +131,10 @@
 !  <DATA NAME="do_check_si_conserve" TYPE="logical">
 !   If true, check that the ecosystem model conserves silicon
 !  </DATA>
-
+!
+!  <DATA NAME="do_bac_remin" TYPE="logical">
+!   If true, bac eat small and big detritus explicitly
+!  </DATA>
 ! </NAMELIST>
 !
 !-----------------------------------------------------------------------
@@ -196,11 +199,12 @@ module generic_WOMBATmid
   logical :: do_check_n_conserve        = .false. ! check that the N fluxes balance in the ecosystem
   logical :: do_check_c_conserve        = .false. ! check that the C fluxes balance in the ecosystem
   logical :: do_check_si_conserve       = .false. ! check that the Si fluxes balance in the ecosystem
+  logical :: do_bac_remin               = .true.  ! bac1 eats POC
 
   namelist /generic_wombatmid_nml/ co2_calc, do_caco3_dynamics, do_colloidal_shunt, do_two_ligands, do_burial, &
                                    do_nitrogen_fixation, do_anammox, do_wc_denitrification, do_benthic_denitrification, &
                                    do_tracer_dicp, do_tracer_dicr, do_viscous_sinking, &
-                                   do_check_n_conserve, do_check_c_conserve, do_check_si_conserve
+                                   do_check_n_conserve, do_check_c_conserve, do_check_si_conserve, do_bac_remin
 
   !=======================================================================
   ! This type contains all the parameters and arrays used in this module
@@ -1166,6 +1170,11 @@ module generic_WOMBATmid
     if (do_check_si_conserve) then
       write (stdoutunit,*) trim(note_header), &
           'Checking that the ecosystem model conserves silicon'
+    endif
+    
+    if (do_bac_remin) then
+      write (stdoutunit,*) trim(note_header), &
+              'Doing explicit bacterial remineralisation of POC'
     endif
 
     ! Specify all prognostic and diagnostic tracers of this modules.
