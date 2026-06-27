@@ -338,6 +338,8 @@ module generic_WOMBATmid
         kafe_dfe, &
         kbafe_dfe, &
         wafe, &
+        wdet, &
+        wbdet, &
         wbafe, &
         bsi_fbac, &
         bsi_kbac, &
@@ -3234,7 +3236,15 @@ module generic_WOMBATmid
     ! Sinking speed of authigenic iron (oxyhydroxide) [m/s]
     !-----------------------------------------------------------------------
     call g_tracer_add_param('wafe', wombat%wafe, 0.5/86400.0)
+    
+    ! Sinking speed of small detritus (wdet) [m/s]
+    !-----------------------------------------------------------------------
+    call g_tracer_add_param('wdet', wombat%wdet, 15.0/86400.0)
 
+    ! Sinking speed of big detritus (wbdet) [m/s]
+    !-----------------------------------------------------------------------
+    call g_tracer_add_param('wbdet', wombat%wbdet, 60.0/86400.0)
+    
     ! Sinking speed of bigger authigenic iron (oxyhydroxide) [m/s]
     !-----------------------------------------------------------------------
     call g_tracer_add_param('wbafe', wombat%wbafe, 5.0/86400.0)
@@ -7326,14 +7336,17 @@ module generic_WOMBATmid
         wombat%det_radius(i,j) = rad_det
         wombat%bdet_radius(i,j) = rad_bdet
       else
-        wombat%p_wdet(i,j,:) = 0.0
-        wombat%p_wdetfe(i,j,:) = 0.0
-        wombat%p_wbdet(i,j,:) = 0.0
-        wombat%p_wbdetfe(i,j,:) = 0.0
-        wombat%p_wbdetsi(i,j,:) = 0.0
-        wombat%p_wcaco3(i,j,:) = 0.0
-        wombat%p_wafe(i,j,:) = 0.0
-        wombat%p_wbafe(i,j,:) = 0.0
+        ! Adding option to have constant sinking rates for det and bdet (27/06/2026 AO)
+        wombat%p_wdet(i,j,:) = wombat%wdet
+        wombat%p_wdetfe(i,j,:) = wombat%wdet
+        wombat%p_wbdet(i,j,:) = wombat%wbdet
+        wombat%p_wbdetfe(i,j,:) = wombat%wbdet
+        wombat%p_wbdetsi(i,j,:) = wombat%wbdet
+        wombat%p_wcaco3(i,j,:) = wombat%wdet
+        wombat%p_wafe(i,j,:) = wombat%wafe
+        wombat%p_wbafe(i,j,:) = wombat%wbafe
+        wombat%det_radius(i,j) = rad_det
+        wombat%bdet_radius(i,j) = rad_bdet
       endif
     enddo; enddo
 
