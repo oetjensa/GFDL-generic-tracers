@@ -6224,6 +6224,7 @@ module generic_WOMBATmid
         ! assign same remineralisation rate as POC
         wombat%doc2remi(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k) ! [molC/kg/s]
         ! assume doc3remi is zero anyways
+      endif
 
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
