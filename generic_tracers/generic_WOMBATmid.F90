@@ -118,6 +118,10 @@
 !  <DATA NAME="do_viscous_sinking" TYPE="logical">
 !   If true, do computation of dynamic viscosity
 !  </DATA>
+!  
+!  <DATA NAME="do_constant_sinking" TYPE="logical">
+!   If true, set constant sinking rates wdet, wbet explicitly
+!  </DATA>
 !
 !  <DATA NAME="do_check_n_conserve" TYPE="logical">
 !   If true, check that the ecosystem model conserves nitrogen. NOTE:
@@ -134,6 +138,10 @@
 !
 !  <DATA NAME="do_bac_remin" TYPE="logical">
 !   If true, bac eat small and big detritus explicitly
+!  </DATA>
+!
+!  <DATA NAME="do_doc_remin" TYPE="logical">
+!   If true, bac2 remineralises DOC, otherwise implicit temperature dependent term
 !  </DATA>
 ! </NAMELIST>
 !
@@ -196,15 +204,17 @@ module generic_WOMBATmid
   logical :: do_tracer_dicp             = .false. ! Enable preformed dissolved inorganic carbon tracer, dicp?
   logical :: do_tracer_dicr             = .false. ! Enable remineralized dissolved inorganic carbon tracer, dicr?
   logical :: do_viscous_sinking         = .true.  ! Rubey's formula uses a non-constant dynamic viscosity?
+  logical :: do_constant_sinking        = .false. ! Option to set sinking rates explicitly
   logical :: do_check_n_conserve        = .false. ! check that the N fluxes balance in the ecosystem
   logical :: do_check_c_conserve        = .false. ! check that the C fluxes balance in the ecosystem
   logical :: do_check_si_conserve       = .false. ! check that the Si fluxes balance in the ecosystem
   logical :: do_bac_remin               = .true.  ! bac1 eats POC
+  logical :: do_doc_remin               = .true.  ! bac2 eats DOC
 
   namelist /generic_wombatmid_nml/ co2_calc, do_caco3_dynamics, do_colloidal_shunt, do_two_ligands, do_burial, &
                                    do_nitrogen_fixation, do_anammox, do_wc_denitrification, do_benthic_denitrification, &
-                                   do_tracer_dicp, do_tracer_dicr, do_viscous_sinking, &
-                                   do_check_n_conserve, do_check_c_conserve, do_check_si_conserve, do_bac_remin
+                                   do_tracer_dicp, do_tracer_dicr, do_viscous_sinking, do_constant_sinking, &
+                                   do_check_n_conserve, do_check_c_conserve, do_check_si_conserve, do_bac_remin, do_doc_remin
 
   !=======================================================================
   ! This type contains all the parameters and arrays used in this module
@@ -227,6 +237,7 @@ module generic_WOMBATmid
         bbioa_dia, &
         alphabio_tri, &
         bbioh, &
+        bbioh_bac, &
         phykn, &
         phykf, &
         phyprefnh4, &
@@ -1158,6 +1169,11 @@ module generic_WOMBATmid
       write (stdoutunit,*) trim(note_header), &
           'Doing dynamic viscosity calculation for input to sinking scheme'
     endif
+    
+    if (do_constant_sinking) then
+      write (stdoutunit,*) trim(note_header), &
+          'Doing explicit constant sinking rates for det and bdet'
+    endif
 
     if (do_check_n_conserve) then
       write (stdoutunit,*) trim(note_header), &
@@ -1177,6 +1193,11 @@ module generic_WOMBATmid
     if (do_bac_remin) then
       write (stdoutunit,*) trim(note_header), &
               'Doing explicit bacterial remineralisation of POC'
+    endif
+
+    if (do_doc_remin) then
+      write (stdoutunit,*) trim(note_header), &
+              'Doing explicit bacterial remineralisation of DOC'
     endif
 
     ! Specify all prognostic and diagnostic tracers of this modules.
@@ -2720,6 +2741,11 @@ module generic_WOMBATmid
     ! Q10 = b^(10)
     !-----------------------------------------------------------------------
     call g_tracer_add_param('bbioh', wombat%bbioh, 1.072)
+    
+    ! Heterotrophy maximum growth rate parameter b EXPLICITLY for remineralisation of POC and DOC [dimensionless]
+    ! Q10 = b^(10)
+    !-----------------------------------------------------------------------
+    call g_tracer_add_param('bbioh_bac', wombat%bbioh_bac, 1.072)
 
     ! Phytoplankton half saturation constant for nitrogen uptake [mmolN/m3]
     !-----------------------------------------------------------------------
@@ -3390,12 +3416,21 @@ module generic_WOMBATmid
     call g_tracer_add_param('bac1qmor', wombat%bac1qmor, 0.05/86400.0)
 
     ! Facultative heterotrophic bacteria #2 maximum rate of uptake of DOC [mmol C m-3 s-1]
+    ! kill off bac2 when using implicit DOC remineralisation
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('bac2_Vmax_doc', wombat%bac2_Vmax_doc, 6.7/86400.0)
+    if (do_doc_remin) then
+      call g_tracer_add_param('bac2_Vmax_doc', wombat%bac2_Vmax_doc, 6.7/86400.0)
+    else
+      call g_tracer_add_param('bac2_Vmax_doc', wombat%bac2_Vmax_doc, 0.0)
+    endif
 
     ! Facultative heterotrophic bacteria #2 maximum rate of uptake of NO3 [mmol N m-3 s-1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('bac2_Vmax_no3', wombat%bac2_Vmax_no3, 7.2/86400.0)
+    if (do_doc_remin) then
+      call g_tracer_add_param('bac2_Vmax_no3', wombat%bac2_Vmax_no3, 7.2/86400.0)
+    else
+      call g_tracer_add_param('bac2_Vmax_no3', wombat%bac2_Vmax_no3, 0.0)
+    endif
 
     ! Facultative heterotrophic bacteria #2 maximum rate of uptake of dFe [mmol Fe m-3 s-1]
     !-----------------------------------------------------------------------
@@ -6162,8 +6197,10 @@ module generic_WOMBATmid
         wombat%detremi(i,j,k) = wombat%poc1remi(i,j,k) * biodet / (biodet + biobdet + epsi)
         wombat%bdetremi(i,j,k) = wombat%poc1remi(i,j,k) * biobdet / (biodet + biobdet + epsi)
       else
+        ! use explicitly different Q10 rate for bac remin of POC      
+        fbc_bac = wombat%bbioh_bac ** (Temp(i,j,k))
         !! Variable rates of remineralisation
-        wombat%reminr(i,j,k) = wombat%detlrem * fbc
+        wombat%reminr(i,j,k) = wombat%detlrem * fbc_bac
 
         !! remineralisation of POM --> DOM
         if (wombat%f_det(i,j,k) > epsi) then
@@ -6179,6 +6216,14 @@ module generic_WOMBATmid
         ! if bac1 is turned off, we switch to the implicit remineralisation of detritus as doc source
         wombat%doc1prod(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k)  ! [molC/kg/s]
       endif
+
+      if (do_doc_remin) then
+        ! explicit loss of DOC by bac2, just leave like this 
+        ! Do nothing
+      else 
+        ! assign same remineralisation rate as POC
+        wombat%doc2remi(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k) ! [molC/kg/s]
+        ! assume doc3remi is zero anyways
 
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
@@ -7325,28 +7370,42 @@ module generic_WOMBATmid
                         - 3.0*wombat%dynvis_sw(i,j,k) ) / (1025.0 * rad_bdet) ! [m/s]
 
         enddo
-        wombat%p_wdet(i,j,:) = wsink1(:)
-        wombat%p_wdetfe(i,j,:) = wsink1(:)
-        wombat%p_wbdet(i,j,:) = wsink2(:)
-        wombat%p_wbdetfe(i,j,:) = wsink2(:)
-        wombat%p_wbdetsi(i,j,:) = wsink2(:)
-        wombat%p_wcaco3(i,j,:) = wsink1(:)
-        wombat%p_wafe(i,j,:) = wombat%wafe
-        wombat%p_wbafe(i,j,:) = wombat%wbafe
-        wombat%det_radius(i,j) = rad_det
-        wombat%bdet_radius(i,j) = rad_bdet
+        ! added option to have set wdet and wbdet explicitly (AO, 29.06.2026)
+        if (do_constant_sinking) then
+          wombat%p_wdet(i,j,:) = wombat%wdet
+          wombat%p_wdetfe(i,j,:) = wombat%wdet
+          wombat%p_wbdet(i,j,:) = wombat%wbdet
+          wombat%p_wbdetfe(i,j,:) = wombat%wbdet
+          wombat%p_wbdetsi(i,j,:) = wombat%wbdet
+          wombat%p_wcaco3(i,j,:) = wombat%wdet
+          wombat%p_wafe(i,j,:) = wombat%wafe
+          wombat%p_wbafe(i,j,:) = wombat%wbafe
+          wombat%det_radius(i,j) = rad_det
+          wombat%bdet_radius(i,j) = rad_bdet
+        else        
+          wombat%p_wdet(i,j,:) = wsink1(:)
+          wombat%p_wdetfe(i,j,:) = wsink1(:)
+          wombat%p_wbdet(i,j,:) = wsink2(:)
+          wombat%p_wbdetfe(i,j,:) = wsink2(:)
+          wombat%p_wbdetsi(i,j,:) = wsink2(:)
+          wombat%p_wcaco3(i,j,:) = wsink1(:)
+          wombat%p_wafe(i,j,:) = wombat%wafe
+          wombat%p_wbafe(i,j,:) = wombat%wbafe
+          wombat%det_radius(i,j) = rad_det
+          wombat%bdet_radius(i,j) = rad_bdet
+        endif
+
       else
-        ! Adding option to have constant sinking rates for det and bdet (27/06/2026 AO)
-        wombat%p_wdet(i,j,:) = wombat%wdet
-        wombat%p_wdetfe(i,j,:) = wombat%wdet
-        wombat%p_wbdet(i,j,:) = wombat%wbdet
-        wombat%p_wbdetfe(i,j,:) = wombat%wbdet
-        wombat%p_wbdetsi(i,j,:) = wombat%wbdet
-        wombat%p_wcaco3(i,j,:) = wombat%wdet
-        wombat%p_wafe(i,j,:) = wombat%wafe
-        wombat%p_wbafe(i,j,:) = wombat%wbafe
-        wombat%det_radius(i,j) = rad_det
-        wombat%bdet_radius(i,j) = rad_bdet
+        wombat%p_wdet(i,j,:) = 0.0
+        wombat%p_wdetfe(i,j,:) = 0.0
+        wombat%p_wbdet(i,j,:) = 0.0
+        wombat%p_wbdetfe(i,j,:) = 0.0
+        wombat%p_wbdetsi(i,j,:) = 0.0
+        wombat%p_wcaco3(i,j,:) = 0.0
+        wombat%p_wafe(i,j,:) = 0.0
+        wombat%p_wbafe(i,j,:) = 0.0
+        wombat%det_radius(i,j) = 0.0
+        wombat%bdet_radius(i,j) = 0.0
       endif
     enddo; enddo
 
