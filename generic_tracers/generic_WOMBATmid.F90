@@ -4331,7 +4331,7 @@ module generic_WOMBATmid
     real                                    :: biobac1, biobac2, biobac3, bioaoa
     real                                    :: biophyfe, biodiafe
     real                                    :: I_denom, wzbac1, wzbac2, wzbac3, wzaoa, wzphy, wzdia, wzdet, wzbdet, wzzoo, I_wzsum
-    real                                    :: fbc, zval, zval1, zval2, zval3, sqrt_zval
+    real                                    :: fbc,fbc_bac, zval, zval1, zval2, zval3, sqrt_zval
     real, parameter                         :: epsi = 1.0e-30
     real, parameter                         :: pi = 3.14159265358979
     real, parameter                         :: Rgas = 8.314462168 ! J/(K mol)
