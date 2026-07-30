@@ -6221,8 +6221,9 @@ module generic_WOMBATmid
         ! explicit loss of DOC by bac2, just leave like this 
         ! Do nothing
       else 
-        ! assign same remineralisation rate as POC
+        ! assign same remineralisation rate as POC (doc2remi is sink for DOC, bac2pco2 is source for DIC)
         wombat%doc2remi(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k) ! [molC/kg/s]
+        wombat%bac2pco2(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k)
         ! assume doc3remi is zero anyways
       endif
 
