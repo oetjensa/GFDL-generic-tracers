@@ -15,8 +15,12 @@ find_dependency(MPI REQUIRED COMPONENTS Fortran)
 find_dependency(fms COMPONENTS R8 REQUIRED)
 find_dependency(mocsy REQUIRED)
 
-# AO (30/09/2026) add ftorch dependency
-list(APPEND CMAKE_PREFIX_PATH "g/data/jk72/ao2582/PyTorch/FTorch_install_ifx" "/g/data/jk72/ao2582/PyTorch/ftorch_test/torchvenv311/lib/python3.11/site-packages/torch")
+# AO (01/10/2026) add ftorch dependency
+set(FTorch_DIR "/g/data/jk72/ao2582/PyTorch/FTorch_install_ifx/lib64/cmake/FTorch" CACHE PATH "" FORCE)
+set(Torch_DIR "/g/data/jk72/ao2582/PyTorch/ftorch_test/torchvenv311/lib/python3.11/site-packages/torch/share/cmake/Torch" CACHE PATH "" FORCE)
+if(NOT EXISTS "${FTorch_DIR}/FTorchConfig.cmake")
+	message(FATAL_ERROR "GFDLGTracers: FTorchConfig.cmake not found in ${FTorch_DIR}")
+endif()
 find_dependency(FTorch)
 # AO -end
 
