@@ -76,6 +76,15 @@ find_package(MPI REQUIRED COMPONENTS Fortran)
 find_package(FMS REQUIRED COMPONENTS R8)
 find_package(mocsy REQUIRED)
 
+# AO -begin 30/09/2026 
+#--- FTorch (remineralisation emulator) ---
+# currently hard-coded paths and FTorch
+set(FTORCH_ROOT "/g/data/jk72/ao2582/PyTorch/FTorch_install_ifx" CACHE PATH "FTorch install prefix")
+set(TORCH_ROOT "/g/data/jk72/ao2582/PyTorch/ftorch_test_torchvenv311/lib/python3.11/site-packages/torch" CACHE PATH "PyTorch install prefix")
+list(APPEND CMAKE_PREFIX_PATH ${FTORCH_ROOT} ${TORCH_ROOT})
+find_package(FTorch REQUIRED)
+# AO -end
+
 add_library(gtracers)
 
 target_sources(gtracers PRIVATE
@@ -94,6 +103,8 @@ target_sources(gtracers PRIVATE
   generic_tracers/generic_TOPAZ.F90
   generic_tracers/generic_tracer.F90
   generic_tracers/generic_tracer_utils.F90
+  # AO add remin_ftorch to source list 
+  generic_tracers/remin_ftorch.f90
   generic_tracers/generic_WOMBATlite.F90
   generic_tracers/generic_WOMBATmid.F90
 )
@@ -111,7 +122,8 @@ target_include_directories(gtracers
 
 target_link_libraries(gtracers PUBLIC
 			FMS::fms_r8
-			mocsy::mocsy)
+			mocsy::mocsy
+		        FTorch::ftorch)  # AO added ftorch
 
 install(TARGETS gtracers
         EXPORT GFDLGTracersTargets)
