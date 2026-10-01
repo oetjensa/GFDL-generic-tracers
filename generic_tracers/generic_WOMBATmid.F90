@@ -156,8 +156,8 @@ module generic_WOMBATmid
   use constants_mod,     only: WTMCO2, WTMO2
   use ftorch,            only: torch_model, torch_tensor, torch_kCPU, torch_model_load, &
                                torch_tensor_from_array, torch_model_forward   ! AO (01/10/2026): add ftorch
- ! use, instrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, &
-  !                   ieee_overflow, ieee_divide_by_zero, ieee_get_haltin_mode, ieee_set_haltin_mode, ieee_set_flag
+  use, instrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, &
+                     ieee_overflow, ieee_divide_by_zero, ieee_get_halting_mode, ieee_set_halting_mode, ieee_set_flag
                        
   use g_tracer_utils, only : g_diag_type, g_tracer_type
   use g_tracer_utils, only : g_tracer_start_param_list, g_tracer_end_param_list
@@ -4289,9 +4289,9 @@ module generic_WOMBATmid
     logical :: halting(3)
 
     remin_x1(1,1) = temp
-    remin_x1(1,2) = o2 * mmol_m3_to_mol_kg  ! convert to training units
-    remin_x1(1,3) = detr * mmol_m3_to_mol_kg
-    remin_x1(1,4) = fe * umol_m3_to_mol_kg
+    remin_x1(1,2) = o2  
+    remin_x1(1,3) = detr
+    remin_x1(1,4) = fe 
 
     call ieee_get_halting_mode(trap_flags, halting)
     call ieee_set_halting_mode(trap_flags, .false.)
@@ -6300,7 +6300,7 @@ module generic_WOMBATmid
       endif
 
       if (do_emulator_shadow .or. use_remin_emulator) then
-        call wombat_remin_point(Temp(i,j,k), biooxy, zval, biofer, remin_rate)
+        call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
         wombat%poc1remi_nn(i,j,k) = min(remin_rate, zval/dtsb)
         if (use_remin_emulator) then
           wombat%poc1remi(i,j,k) = wombat%poc1remi_nn(i,j,k)
