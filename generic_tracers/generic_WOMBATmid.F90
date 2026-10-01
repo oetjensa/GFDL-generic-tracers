@@ -156,7 +156,7 @@ module generic_WOMBATmid
   use constants_mod,     only: WTMCO2, WTMO2
   use ftorch,            only: torch_model, torch_tensor, torch_kCPU, torch_model_load, &
                                torch_tensor_from_array, torch_model_forward   ! AO (01/10/2026): add ftorch
-  use, instrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, &
+  use, intrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, &
                      ieee_overflow, ieee_divide_by_zero, ieee_get_halting_mode, ieee_set_halting_mode, ieee_set_flag
                        
   use g_tracer_utils, only : g_diag_type, g_tracer_type
