@@ -154,7 +154,11 @@ module generic_WOMBATmid
   use fms_mod,           only: write_version_number, check_nml_error, stdout, stdlog
   use time_manager_mod,  only: time_type
   use constants_mod,     only: WTMCO2, WTMO2
-
+  use ftorch,            only: torch_model, torch_tensor, torch_kCPU, torch_model_load, &
+                               torch_tensor_from_array, torch_model_forward   ! AO (01/10/2026): add ftorch
+ ! use, instrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, &
+  !                   ieee_overflow, ieee_divide_by_zero, ieee_get_haltin_mode, ieee_set_haltin_mode, ieee_set_flag
+                       
   use g_tracer_utils, only : g_diag_type, g_tracer_type
   use g_tracer_utils, only : g_tracer_start_param_list, g_tracer_end_param_list
   use g_tracer_utils, only : g_tracer_add, g_tracer_add_param, g_tracer_set_files
@@ -189,6 +193,14 @@ module generic_WOMBATmid
 
   real, parameter :: missing_value1 = -1.0e+10
 
+  ! get ftorch read
+  logical                           :: remin_ready = .false.  ! pre-run checks if emulator is ready
+  type(torch_model)                 :: remin_model
+  type(torch_tensor), dimension(1)  :: remin_in, remin_out
+  real(kind=8), allocatable, target :: remin_x1(:,:)     ! (1, 4) inputs
+  real(kind=8), allocatable, target :: remin_y1(:)       ! (1)    output 
+  
+
   !=======================================================================
   ! Namelist Options
   !=======================================================================
@@ -210,11 +222,15 @@ module generic_WOMBATmid
   logical :: do_check_si_conserve       = .false. ! check that the Si fluxes balance in the ecosystem
   logical :: do_bac_remin               = .true.  ! bac1 eats POC
   logical :: do_doc_remin               = .true.  ! bac2 eats DOC
+  logical :: use_remin_emulator         = .false. ! use the emulator to drive remineralisation
+  logical :: do_emulator_shadow         = .false. ! run emulator alongside bacteria and record difference
+  character(len=256) :: remin_emulator_path = ''  ! hard-code path to emulator
 
   namelist /generic_wombatmid_nml/ co2_calc, do_caco3_dynamics, do_colloidal_shunt, do_two_ligands, do_burial, &
                                    do_nitrogen_fixation, do_anammox, do_wc_denitrification, do_benthic_denitrification, &
                                    do_tracer_dicp, do_tracer_dicr, do_viscous_sinking, do_constant_sinking, &
-                                   do_check_n_conserve, do_check_c_conserve, do_check_si_conserve, do_bac_remin, do_doc_remin
+                                   do_check_n_conserve, do_check_c_conserve, do_check_si_conserve, do_bac_remin, do_doc_remin, &
+                                   use_remin_emulator, do_emulator_shadow, remin_emulator_path
 
   !=======================================================================
   ! This type contains all the parameters and arrays used in this module
@@ -697,6 +713,7 @@ module generic_WOMBATmid
         aoamorl, &
         aoamorq, &
         poc1remi, &
+        poc1remi_nn, &
         doc1prod, &
         doc2remi, &
         doc2prod, &
@@ -942,6 +959,7 @@ module generic_WOMBATmid
         id_aoamorl = -1, &
         id_aoamorq = -1, &
         id_poc1remi = -1, &
+        id_poc1remi_nn= -1, &
         id_doc1prod = -1, &
         id_doc2remi = -1, &
         id_doc2prod = -1, &
@@ -1198,6 +1216,10 @@ module generic_WOMBATmid
     if (do_doc_remin) then
       write (stdoutunit,*) trim(note_header), &
               'Doing explicit bacterial remineralisation of DOC'
+    endif
+    
+    if (do_emulator_shadow .or. use_remin_emulator) then 
+      call wombat_remin_init()
     endif
 
     ! Specify all prognostic and diagnostic tracers of this modules.
@@ -2251,6 +2273,11 @@ module generic_WOMBATmid
     vardesc_temp = vardesc( &
         'poc1remi', 'Remineralisation of particulate organic carbon by bacteria #1', 'h', 'L', 's', 'molC/kg/s', 'f')
     wombat%id_poc1remi = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
+        init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
+    
+    vardesc_temp = vardesc( &
+        'poc1remi_nn', 'Remineralisation of particulate organic carbon by Emulator', 'h', 'L', 's', 'molC/kg/s', 'f')
+    wombat%id_poc1remi_nn = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
         init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
 
         vardesc_temp = vardesc( &
@@ -4234,6 +4261,48 @@ module generic_WOMBATmid
 
   end subroutine generic_WOMBATmid_update_from_bottom
 
+  subroutine wombat_remin_init()
+    logical :: file_exists
+    
+    if (remin_ready) return
+
+    inquire(file=trim(remin_emulator_path), exist=file_exists)
+    if(.not. file_exists) call mpp_error(FATAL, &
+            'generic_WOMBAT_mid: emulator file not found: '//trim(remin_emulator_path))
+
+    allocate(remin_x1(1, 4), remin_y1(1))
+    remin_x1 = 1.0d0  ! dummy value
+    remin_y1 = 0.0d0
+    
+    call torch_model_load(remin_model, trim(remin_emulator_path), torch_kCPU)
+    call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
+    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
+    remin_ready = .true.
+
+  end subroutine wombat_remin_init
+
+  subroutine wombat_remin_point(temp, o2, detr, fe, rate)
+    real(kind=8), intent(in)   :: temp, o2, detr, fe
+    real(kind=8), intent(out)  :: rate
+    type(ieee_flag_type), parameter :: trap_flags(3) = &
+            [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
+    logical :: halting(3)
+
+    remin_x1(1,1) = temp
+    remin_x1(1,2) = o2 * mmol_m3_to_mol_kg  ! convert to training units
+    remin_x1(1,3) = detr * mmol_m3_to_mol_kg
+    remin_x1(1,4) = fe * umol_m3_to_mol_kg
+
+    call ieee_get_halting_mode(trap_flags, halting)
+    call ieee_set_halting_mode(trap_flags, .false.)
+    call torch_model_forward(remin_model, remin_in, remin_out)
+    call ieee_set_flag(trap_flags, .false.)
+    call ieee_set_halting_mode(trap_flags, halting)
+
+    rate = remin_y1(1)
+  end subroutine wombat_remin_point
+
+
   !#######################################################################
   !
   ! <SUBROUTINE NAME="generic_WOMBATmid_update_from_source">
@@ -4331,7 +4400,7 @@ module generic_WOMBATmid
     real                                    :: biobac1, biobac2, biobac3, bioaoa
     real                                    :: biophyfe, biodiafe
     real                                    :: I_denom, wzbac1, wzbac2, wzbac3, wzaoa, wzphy, wzdia, wzdet, wzbdet, wzzoo, I_wzsum
-    real                                    :: fbc,fbc_bac, zval, zval1, zval2, zval3, sqrt_zval
+    real                                    :: fbc,fbc_bac, zval, zval1, zval2, zval3, sqrt_zval, remin_rate
     real, parameter                         :: epsi = 1.0e-30
     real, parameter                         :: pi = 3.14159265358979
     real, parameter                         :: Rgas = 8.314462168 ! J/(K mol)
@@ -4779,6 +4848,7 @@ module generic_WOMBATmid
     wombat%aoamorl(:,:,:) = 0.0
     wombat%aoamorq(:,:,:) = 0.0
     wombat%poc1remi(:,:,:) = 0.0
+    wombat%poc1remi_nn(:,:,:) = 0.0
     wombat%doc1prod(:,:,:) = 0.0
     wombat%doc2remi(:,:,:) = 0.0
     wombat%doc2prod(:,:,:) = 0.0
@@ -5004,6 +5074,7 @@ module generic_WOMBATmid
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
+
     do j = jsc,jec; do i = isc,iec
       !--- Retrieve incident light ---!
       ! dts: keep only shortwave wavelengths < 710 nm (taken from COBALT/BLING)
@@ -6192,6 +6263,7 @@ module generic_WOMBATmid
       wombat%bac3pnh4(i,j,k) = wombat%bac3grow(i,j,k) * bac3_pnh4 * (1. - wombat%bac3_fanaer(i,j,k)) &
                                + wombat%bac3grow(i,j,k) * bac3_pnh4_ana * wombat%bac3_fanaer(i,j,k) ! [molN/kg/s]
 
+
       if (do_bac_remin) then
         ! Total loss of small and large particulate detritus by bacterial action
         wombat%detremi(i,j,k) = wombat%poc1remi(i,j,k) * biodet / (biodet + biobdet + epsi)
@@ -6225,6 +6297,14 @@ module generic_WOMBATmid
         wombat%doc2remi(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k) ! [molC/kg/s]
         wombat%bac2pco2(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k)
         ! assume doc3remi is zero anyways
+      endif
+
+      if (do_emulator_shadow .or. use_remin_emulator) then
+        call wombat_remin_point(Temp(i,j,k), biooxy, zval, biofer, remin_rate)
+        wombat%poc1remi_nn(i,j,k) = min(remin_rate, zval/dtsb)
+        if (use_remin_emulator) then
+          wombat%poc1remi(i,j,k) = wombat%poc1remi_nn(i,j,k)
+        endif
       endif
 
       !-----------------------------------------------------------------------!
@@ -8205,7 +8285,11 @@ module generic_WOMBATmid
       used = g_send_data(wombat%id_poc1remi, wombat%poc1remi, model_time, &
           rmask=grid_tmask, is_in=isc, js_in=jsc, ks_in=1, ie_in=iec, je_in=jec, ke_in=nk)
 
-    if (wombat%id_doc1prod > 0) &
+    if (wombat%id_poc1remi_nn > 0) &
+      used = g_send_data(wombat%id_poc1remi_nn, wombat%poc1remi_nn, model_time, &
+          rmask=grid_tmask, is_in=isc, js_in=jsc, ks_in=1, ie_in=iec, je_in=jec, ke_in=nk)
+    
+   if (wombat%id_doc1prod > 0) &
       used = g_send_data(wombat%id_doc1prod, wombat%doc1prod, model_time, &
           rmask=grid_tmask, is_in=isc, js_in=jsc, ks_in=1, ie_in=iec, je_in=jec, ke_in=nk)
 
@@ -9090,6 +9174,7 @@ module generic_WOMBATmid
     allocate(wombat%aoamorl(isd:ied, jsd:jed, 1:nk)); wombat%aoamorl(:,:,:)=0.0
     allocate(wombat%aoamorq(isd:ied, jsd:jed, 1:nk)); wombat%aoamorq(:,:,:)=0.0
     allocate(wombat%poc1remi(isd:ied, jsd:jed, 1:nk)); wombat%poc1remi(:,:,:)=0.0
+    allocate(wombat%poc1remi_nn(isd:ied, jsd:jed, 1:nk)); wombat%poc1remi_nn(:,:,:)=0.0
     allocate(wombat%doc1prod(isd:ied, jsd:jed, 1:nk)); wombat%doc1prod(:,:,:)=0.0
     allocate(wombat%doc2remi(isd:ied, jsd:jed, 1:nk)); wombat%doc2remi(:,:,:)=0.0
     allocate(wombat%doc2prod(isd:ied, jsd:jed, 1:nk)); wombat%doc2prod(:,:,:)=0.0
@@ -9419,6 +9504,7 @@ module generic_WOMBATmid
         wombat%aoamorl, &
         wombat%aoamorq, &
         wombat%poc1remi, &
+        wombat%poc1remi_nn, &
         wombat%doc1prod, &
         wombat%doc2remi, &
         wombat%doc2prod, &
