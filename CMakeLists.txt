@@ -103,8 +103,6 @@ target_sources(gtracers PRIVATE
   generic_tracers/generic_TOPAZ.F90
   generic_tracers/generic_tracer.F90
   generic_tracers/generic_tracer_utils.F90
-  # AO add remin_ftorch to source list 
-  generic_tracers/remin_ftorch.f90
   generic_tracers/generic_WOMBATlite.F90
   generic_tracers/generic_WOMBATmid.F90
 )
