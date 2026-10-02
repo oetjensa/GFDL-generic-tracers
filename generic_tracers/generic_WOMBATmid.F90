@@ -156,8 +156,8 @@ module generic_WOMBATmid
   use constants_mod,     only: WTMCO2, WTMO2
   use ftorch,            only: torch_model, torch_tensor, torch_kCPU, torch_model_load, &
                                torch_tensor_from_array, torch_model_forward   ! AO (01/10/2026): add ftorch
-  !use, intrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, &
-  !                   ieee_overflow, ieee_divide_by_zero, ieee_get_halting_mode, ieee_set_halting_mode, ieee_set_flag
+  use, intrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, &
+                     ieee_overflow, ieee_divide_by_zero, ieee_get_halting_mode, ieee_set_halting_mode, ieee_set_flag
                        
   use g_tracer_utils, only : g_diag_type, g_tracer_type
   use g_tracer_utils, only : g_tracer_start_param_list, g_tracer_end_param_list
@@ -4284,20 +4284,20 @@ module generic_WOMBATmid
   subroutine wombat_remin_point(temp, o2, detr, fe, rate)
     real(kind=8), intent(in)   :: temp, o2, detr, fe
     real(kind=8), intent(out)  :: rate
-   ! type(ieee_flag_type), parameter :: trap_flags(3) = &
-   !         [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
-   ! logical :: halting(3)
+    type(ieee_flag_type), parameter :: trap_flags(3) = &
+            [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
+    logical :: halting(3)
 
     remin_x1(1,1) = temp
     remin_x1(1,2) = o2  
     remin_x1(1,3) = detr
     remin_x1(1,4) = fe 
 
-   ! call ieee_get_halting_mode(trap_flags, halting)
-   ! call ieee_set_halting_mode(trap_flags, .false.)
-   ! call torch_model_forward(remin_model, remin_in, remin_out)
-   ! call ieee_set_flag(trap_flags, .false.)
-   ! call ieee_set_halting_mode(trap_flags, halting)
+    call ieee_get_halting_mode(trap_flags, halting)
+    call ieee_set_halting_mode(trap_flags, .false.)
+    call torch_model_forward(remin_model, remin_in, remin_out)
+    call ieee_set_flag(trap_flags, .false.)
+    call ieee_set_halting_mode(trap_flags, halting)
 
     rate = remin_y1(1)
   end subroutine wombat_remin_point
@@ -6273,6 +6273,7 @@ module generic_WOMBATmid
         if (do_emulator_shadow) then
           call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
           wombat%poc1remi_nn(i,j,k) = min(remin_rate, zval/dtsb)
+        endif
       else if (use_remin_emulator) then     
         ! use the emulator to predict reminersalisation rate
         call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
