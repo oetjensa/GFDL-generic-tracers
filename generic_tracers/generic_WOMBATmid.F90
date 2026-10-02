@@ -6268,12 +6268,24 @@ module generic_WOMBATmid
         ! Total loss of small and large particulate detritus by bacterial action
         wombat%detremi(i,j,k) = wombat%poc1remi(i,j,k) * biodet / (biodet + biobdet + epsi)
         wombat%bdetremi(i,j,k) = wombat%poc1remi(i,j,k) * biobdet / (biodet + biobdet + epsi)
-      else
+
+        ! emmulator shadow
+        if (do_emulator_shadow) then
+          call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
+          wombat%poc1remi_nn(i,j,k) = min(remin_rate, zval/dtsb)
+      else if (use_remin_emulator) then     
+        ! use the emulator to predict reminersalisation rate
+        call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
+        wombat%poc1remi(i,j,k) = min(remin_rate, zval/dtsb)
+        wombat%detremi(i,j,k) = wombat%poc1remi(i,j,k) * biodet / (biodet + biobdet + epsi)
+        wombat%bdetremi(i,j,k) = wombat%poc1remi(i,j,k) * biobdet / (biodet + biobdet + epsi)
+        ! if bac1 is turned off, we switch to the implicit remineralisation of detritus as doc source
+        wombat%doc1prod(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k)  ! [molC/kg/s]
+       else
         ! use explicitly different Q10 rate for bac remin of POC      
         fbc_bac = wombat%bbioh_bac ** (Temp(i,j,k))
         !! Variable rates of remineralisation
         wombat%reminr(i,j,k) = wombat%detlrem * fbc_bac
-
         !! remineralisation of POM --> DOM
         if (wombat%f_det(i,j,k) > epsi) then
           wombat%detremi(i,j,k) = wombat%reminr(i,j,k) / mmol_m3_to_mol_kg * wombat%f_det(i,j,k)**2.0 ! [molC/kg/s]
@@ -6297,14 +6309,6 @@ module generic_WOMBATmid
         wombat%doc2remi(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k) ! [molC/kg/s]
         wombat%bac2pco2(i,j,k) = wombat%detremi(i,j,k) + wombat%bdetremi(i,j,k)
         ! assume doc3remi is zero anyways
-      endif
-
-      if (do_emulator_shadow .or. use_remin_emulator) then
-        call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
-        wombat%poc1remi_nn(i,j,k) = min(remin_rate, zval/dtsb)
-        if (use_remin_emulator) then
-          wombat%poc1remi(i,j,k) = wombat%poc1remi_nn(i,j,k)
-        endif
       endif
 
       !-----------------------------------------------------------------------!
