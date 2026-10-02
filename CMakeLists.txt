@@ -76,11 +76,11 @@ find_package(MPI REQUIRED COMPONENTS Fortran)
 find_package(FMS REQUIRED COMPONENTS R8)
 find_package(mocsy REQUIRED)
 
-# AO -begin 30/09/2026 
+# AO -begin 02/10/2026 
 #--- FTorch (remineralisation emulator) ---
 # currently hard-coded paths and FTorch
-set(FTORCH_ROOT "/g/data/jk72/ao2582/PyTorch/FTorch_install_ifx" CACHE PATH "FTorch install prefix")
-set(TORCH_ROOT "/g/data/jk72/ao2582/PyTorch/ftorch_test_torchvenv311/lib/python3.11/site-packages/torch" CACHE PATH "PyTorch install prefix")
+set(FTORCH_ROOT "/g/data/jk72/ao2582/ACCESS/wombat_dev/ACCESS-OM3/ftorch_model/FTorch_install" CACHE PATH "FTorch install prefix")
+set(TORCH_ROOT "/g/data/jk72/ao2582/ACCESS/wombat_dev/ACCESS-OM3/ftorch_model/torchvenv/lib/python3.11/site-packages/torch" CACHE PATH "PyTorch install prefix")
 list(APPEND CMAKE_PREFIX_PATH ${FTORCH_ROOT} ${TORCH_ROOT})
 find_package(FTorch REQUIRED)
 # AO -end
