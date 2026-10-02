@@ -4285,7 +4285,7 @@ module generic_WOMBATmid
     real(kind=8), intent(in)   :: temp, o2, detr, fe
     real(kind=8), intent(out)  :: rate
    ! type(ieee_flag_type), parameter :: trap_flags(3) = &
-            [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
+   !         [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
    ! logical :: halting(3)
 
     remin_x1(1,1) = temp
