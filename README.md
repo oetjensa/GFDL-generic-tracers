@@ -7,6 +7,15 @@ This fork includes generic tracer implementations of the suite of [WOMBAT models
 
 **This is the development branch for WOMBAT-hy**
 
+
+# TEST 1: Emulator shadow
+
+run emulator and bacteria in parallel
+
+
+
+
+
 # Setup PyTorch and FTorch on GADI
 
 ## PyTorch
