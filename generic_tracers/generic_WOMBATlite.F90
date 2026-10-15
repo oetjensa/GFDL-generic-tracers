@@ -61,10 +61,10 @@
 !
 ! <NAMELIST NAME="generic_wombatlite_nml">
 !  <DATA NAME="co2_calc" TYPE="character">
-!   Defines the carbon equiliabration method.  Default is 'ocmip2' which
-!   uses the FMS_ocmip2_co2calc routine.  The other option is 'mocsy',
-!   which uses the set of routines authored by J. Orr. See reference at:
+!   Defines the carbon equiliabration method.  Default is 'mocsy' which
+!   uses the set of routines authored by J. Orr. See reference at:
 !   http://ocmip5.ipsl.jussieu.fr/mocsy/index.html
+!   The other option is 'ocmip2', which uses the FMS_ocmip2_co2calc routine.
 !  </DATA>
 !
 !  <DATA NAME="do_caco3_dynamics" TYPE="logical">
@@ -107,6 +107,11 @@
 !  <DATA NAME="do_check_c_conserve" TYPE="logical">
 !   If true, check that the ecosystem model conserves carbon
 !  </DATA>
+!
+!  <DATA NAME="do_check_fe_conserve" TYPE="logical">
+!   If true, check that the ecosystem model conserves iron
+!  </DATA>
+!
 ! </NAMELIST>
 !
 !-----------------------------------------------------------------------
@@ -167,11 +172,12 @@ module generic_WOMBATlite
   logical :: do_tracer_dicr             = .false. ! enable remineralised dissolved inorganic carbon tracer dicr?
   logical :: do_check_n_conserve        = .false. ! check that the N fluxes balance in the ecosystem
   logical :: do_check_c_conserve        = .false. ! check that the C fluxes balance in the ecosystem
+  logical :: do_check_fe_conserve       = .false. ! check that the Fe fluxes balance in the ecosystem
 
   namelist /generic_wombatlite_nml/ co2_calc, do_caco3_dynamics, do_colloidal_shunt, &
                                     do_two_ligands, do_burial, do_nitrogen_fixation, do_benthic_denitrification, &
                                     do_tracer_dicp, do_tracer_dicr, &
-                                    do_check_n_conserve, do_check_c_conserve
+                                    do_check_n_conserve, do_check_c_conserve, do_check_fe_conserve
 
   !=======================================================================
   ! This type contains all the parameters and arrays used in this module
@@ -234,7 +240,9 @@ module generic_WOMBATlite
         ligW, &
         ligS, &
         dfefloor, &
-        knano_dfe, &
+        detfesedfloor, &
+        ffeburymin, &
+        ffeburymax, &
         kscav_dfe, &
         kcoag_dfe, &
         kagg_col, &
@@ -251,8 +259,8 @@ module generic_WOMBATlite
         Rho_0, &
         a_0, a_1, a_2, a_3, a_4, a_5, &
         b_0, b_1, b_2, b_3, c_0, &
-        a1_co2, a2_co2, a3_co2, a4_co2, &
-        a1_o2, a2_o2, a3_o2, a4_o2
+        a1_co2, a2_co2, a3_co2, a4_co2, a5_co2, &
+        a1_o2, a2_o2, a3_o2, a4_o2, a5_o2
 
     character(len=fm_string_len) :: ice_restart_file
     character(len=fm_string_len) :: ocean_restart_file
@@ -293,6 +301,7 @@ module generic_WOMBATlite
         detfe_sed_remin, &
         caco3_sed_remin, &
         fbury, &
+        ffebury, &
         fdenit, &
         zeuphot, &
         seddep, &
@@ -330,7 +339,6 @@ module generic_WOMBATlite
         felig, &
         ligK, &
         fecol, &
-        feprecip, &
         fescaven, &
         fescadet, &
         fecoag2det, &
@@ -426,7 +434,6 @@ module generic_WOMBATlite
         id_felig = -1, &
         id_ligK = -1, &
         id_fecol = -1, &
-        id_feprecip = -1, &
         id_fescaven = -1, &
         id_fescadet = -1, &
         id_fecoag2det = -1, &
@@ -473,6 +480,7 @@ module generic_WOMBATlite
         id_det_sed_denit = -1, &
         id_det_sed_depst = -1, &
         id_fbury = -1, &
+        id_ffebury = -1, &
         id_fdenit = -1, &
         id_detfe_sed_remin = -1, &
         id_detfe_sed_depst = -1, &
@@ -616,6 +624,11 @@ module generic_WOMBATlite
     if (do_check_c_conserve) then
       write (stdoutunit,*) trim(note_header), &
           'Checking that the ecosystem model conserves carbon'
+    endif
+
+    if (do_check_fe_conserve) then
+      write (stdoutunit,*) trim(note_header), &
+          'Checking that the ecosystem model conserves iron'
     endif
 
     ! Specify all prognostic and diagnostic tracers of this modules.
@@ -836,6 +849,12 @@ module generic_WOMBATlite
         init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
 
     vardesc_temp = vardesc( &
+        'ffebury', 'Fraction of deposited iron permanently buried beneath sediment', &
+        'h', '1', 's', '[0-1]', 'f')
+    wombat%id_ffebury = register_diag_field(package_name, vardesc_temp%name, axes(1:2), &
+        init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
+
+    vardesc_temp = vardesc( &
         'fdenit', 'Fraction of detritus remineralised via denitrification', &
         'h', '1', 's', '[0-1]', 'f')
     wombat%id_fdenit = register_diag_field(package_name, vardesc_temp%name, axes(1:2), &
@@ -958,11 +977,6 @@ module generic_WOMBATlite
     vardesc_temp = vardesc( &
         'fecol', 'Colloidal dissolved iron', 'h', 'L', 's', 'mol/kg', 'f')
     wombat%id_fecol = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
-        init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
-
-    vardesc_temp = vardesc( &
-        'feprecip', 'Precipitation of free Fe onto nanoparticles', 'h', 'L', 's', 'mol/kg/s', 'f')
-    wombat%id_feprecip = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
         init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
 
     vardesc_temp = vardesc( &
@@ -1251,20 +1265,20 @@ module generic_WOMBATlite
     ! Schmidt number coefficients [1]
     !-----------------------------------------------------------------------
     ! Compute the Schmidt number of CO2 in seawater using the
-    ! formulation presented by Wanninkhof (1992, J. Geophys. Res., 97,
-    ! 7373-7382).
-    call g_tracer_add_param('a1_co2', wombat%a1_co2,  2073.1)
-    call g_tracer_add_param('a2_co2', wombat%a2_co2, -125.62)
-    call g_tracer_add_param('a3_co2', wombat%a3_co2,  3.6276)
-    call g_tracer_add_param('a4_co2', wombat%a4_co2, -0.043219)
+    ! formulation proposed by Wanninkhof (2014, Limnology and Oceanography: Methods, 12, 351-362)
+    call g_tracer_add_param('a1_co2', wombat%a1_co2,  2116.8)
+    call g_tracer_add_param('a2_co2', wombat%a2_co2, -136.25)
+    call g_tracer_add_param('a3_co2', wombat%a3_co2,  4.7353)
+    call g_tracer_add_param('a4_co2', wombat%a4_co2, -0.092307)
+    call g_tracer_add_param('a5_co2', wombat%a5_co2,  0.0007555)
 
     ! Compute the Schmidt number of O2 in seawater using the
-    ! formulation proposed by Keeling et al. (1998, Global Biogeochem.
-    ! Cycles, 12, 141-163).
-    call g_tracer_add_param('a1_o2', wombat%a1_o2, 1638.0)
-    call g_tracer_add_param('a2_o2', wombat%a2_o2, -81.83)
-    call g_tracer_add_param('a3_o2', wombat%a3_o2, 1.483)
-    call g_tracer_add_param('a4_o2', wombat%a4_o2, -0.008004)
+    ! formulation proposed by Wanninkhof (2014, Limnology and Oceanography: Methods, 12, 351-362)
+    call g_tracer_add_param('a1_o2', wombat%a1_o2, 1920.4)
+    call g_tracer_add_param('a2_o2', wombat%a2_o2, -135.6)
+    call g_tracer_add_param('a3_o2', wombat%a3_o2, 5.2122)
+    call g_tracer_add_param('a4_o2', wombat%a4_o2, -0.10939)
+    call g_tracer_add_param('a5_o2', wombat%a5_o2, 0.00093777)
 
     ! Initial H+ concentration [mol/kg]
     !-----------------------------------------------------------------------
@@ -1309,11 +1323,11 @@ module generic_WOMBATlite
 
     ! Autotrophy maximum growth rate parameter b [1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('bbioa', wombat%bbioa, 1.050)
+    call g_tracer_add_param('bbioa', wombat%bbioa, 1.070)
 
     ! Heterotrophy maximum growth rate parameter b [1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('bbioh', wombat%bbioh, 1.060)
+    call g_tracer_add_param('bbioh', wombat%bbioh, 1.072)
 
     ! Phytoplankton half saturation constant for nitrogen uptake [mmolN/m3]
     !-----------------------------------------------------------------------
@@ -1329,7 +1343,7 @@ module generic_WOMBATlite
 
     ! Phytoplankton maximum quota of chlorophyll to carbon [mg/mg]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('phymaxqc', wombat%phymaxqc, 0.060)
+    call g_tracer_add_param('phymaxqc', wombat%phymaxqc, 0.030)
 
     ! Timescale over which chlorophyll to carbon ratios are altered [s]
     !-----------------------------------------------------------------------
@@ -1345,7 +1359,7 @@ module generic_WOMBATlite
 
     ! Phytoplankton linear mortality rate constant [1/s]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('phylmor', wombat%phylmor, 0.005/86400.0)
+    call g_tracer_add_param('phylmor', wombat%phylmor, 0.0035/86400.0)
 
     ! Phytoplankton quadratic mortality rate constant [m3/mmolN/s]
     !-----------------------------------------------------------------------
@@ -1373,19 +1387,19 @@ module generic_WOMBATlite
 
     ! Zooplankton ingestion efficiency of prey carbon (the rest is egested) [1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('zooCingest', wombat%zooCingest, 0.8)
+    call g_tracer_add_param('zooCingest', wombat%zooCingest, 0.86)
 
     ! Zooplankton assimilation of ingested prey carbon (the rest is excreted) [0-1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('zooCassim', wombat%zooCassim, 0.3)
+    call g_tracer_add_param('zooCassim', wombat%zooCassim, 0.40)
 
     ! Zooplankton ingestion efficiency of prey carbon (the rest is egested) [1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('zooFeingest', wombat%zooFeingest, 0.2)
+    call g_tracer_add_param('zooFeingest', wombat%zooFeingest, 0.20)
 
     ! Zooplankton assimilation of ingested prey carbon (the rest is excreted) [0-1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('zooFeassim', wombat%zooFeassim, 0.9)
+    call g_tracer_add_param('zooFeassim', wombat%zooFeassim, 0.86)
 
     ! Zooplankton dissolution efficiency of CaCO3 within guts [1]
     !-----------------------------------------------------------------------
@@ -1403,13 +1417,13 @@ module generic_WOMBATlite
     !  - e.g., ciliates feeding on small (nano/pico)phytoplankton
     !  - aim for half-saturation coefficent B1/2 = 2.5 mmolC/m3, where B1/2 = (gmax/eps)^(0.5)
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('zooepsphy', wombat%zooepsphy, 0.40/86400.0)
+    call g_tracer_add_param('zooepsphy', wombat%zooepsphy, 0.30/86400.0)
 
     ! Zooplankton prey capture rate constant for small detritus [(mmol C m-3)-2 s-1]
     !  - e.g., protozoa grazing on slowly sinking detrital particles
-    !  - aim for half-saturation coefficent B1/2 = 5.0 mmolC/m3, where B1/2 = (gmax/eps)^(0.5)
+    !  - aim for half-saturation coefficent B1/2 = 1.0 mmolC/m3, where B1/2 = (gmax/eps)^(0.5)
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('zooepsdet', wombat%zooepsdet, 0.25/86400.0)
+    call g_tracer_add_param('zooepsdet', wombat%zooepsdet, 1.0/86400.0)
 
     ! Prey switching exponent for microzooplantkon [van Leeuwen et al. (2013), J. Theor. Biol.]
     ! when <1, more even feeding across prey items
@@ -1424,11 +1438,11 @@ module generic_WOMBATlite
 
     ! Zooplankton preference for detritus [0-1]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('zprefdet', wombat%zprefdet, 0.50)
+    call g_tracer_add_param('zprefdet', wombat%zprefdet, 1.0)
 
     ! Zooplankton respiration rate constant [1/s]
     !-----------------------------------------------------------------------
-    call g_tracer_add_param('zoolmor', wombat%zoolmor, 0.0025/86400.0)
+    call g_tracer_add_param('zoolmor', wombat%zoolmor, 0.0010/86400.0)
 
     ! Zooplankton quadratic mortality rate constant [m3/mmolN/s]
     !-----------------------------------------------------------------------
@@ -1440,7 +1454,7 @@ module generic_WOMBATlite
     ! matter concentration, with a detlrem equal to 10-5 per second,
     ! a 50% fraction (f) would be remineralised in 11 days.
     ! -ln(f) / k, where k = reminr*[det]**2
-    call g_tracer_add_param('detlrem', wombat%detlrem, 0.5/86400.0)
+    call g_tracer_add_param('detlrem', wombat%detlrem, 0.3/86400.0)
 
     ! Base detritus sinking rate coefficient [m/s]
     !-----------------------------------------------------------------------
@@ -1457,7 +1471,7 @@ module generic_WOMBATlite
     ! Bottom thickness [m]
     !-----------------------------------------------------------------------
     ! Thickness over which tracer values are integrated to define the bottom layer
-    call g_tracer_add_param('bottom_thickness', wombat%bottom_thickness, 1.0)
+    call g_tracer_add_param('bottom_thickness', wombat%bottom_thickness, 0.1)
 
     ! Detritus remineralisation rate constant in sediments [1/s]
     !-----------------------------------------------------------------------
@@ -1507,9 +1521,18 @@ module generic_WOMBATlite
     !-----------------------------------------------------------------------
     call g_tracer_add_param('dfefloor', wombat%dfefloor, 0.05)
 
-    ! Precipitation of Fe` as nanoparticles (in excess of solubility) [/s]
-    !-----------------------------------------------------------------------
-    call g_tracer_add_param('knano_dfe', wombat%knano_dfe, 0.1/86400.0)
+    ! Set floor on the detrital iron sediment reservoir [umol/m2] in shallow (<=200m) columns.
+    ! This replaces the previous approach (taken from WOMBAT legacy) of setting the bottom cell
+    ! dFe concentration to 1 nM, which led to sharp gradients and associated issues.
+    call g_tracer_add_param('detfesedfloor', wombat%detfesedfloor, 30.0)
+
+    ! Set minimum fraction of detrital iron that is buried in the sediments.
+    ! Recommend between 0.40 and 0.60 to prevent unrealistic accumulation or depletion.
+    call g_tracer_add_param('ffeburymin', wombat%ffeburymin, 0.50)
+
+    ! Set maximum fraction of detrital iron that is buried in the sediments.
+    ! Recommend between 0.70 and 0.90 to prevent unrealistic accumulation or depletion.
+    call g_tracer_add_param('ffeburymax', wombat%ffeburymax, 0.90)
 
     ! Scavenging of Fe` onto biogenic particles [(mmol/m3)-1 s-1]
     !-----------------------------------------------------------------------
@@ -1527,12 +1550,12 @@ module generic_WOMBATlite
     ! Colloigal coagulation rates are the principal way to remove dFe at high
     ! concentrations. Effectively, when `do_colloidal_shunt == .true.`, the
     ! `kcoag_dfe` parameter sets the maximum dFe concentration via:
-    !    [dFe remaining in solution] = dFe_sources / kcoag_dfe
-    !  1e-5 ---> coagulation at roughly 0.1 per day in productive surface waters
-    !            and 1/1000 per day in deep ocean
-    !  1e-6 ---> coagulation at roughly 0.01 per day in productive surface waters
-    !            and 1/10000 per day in deep ocean
-    call g_tracer_add_param('kcoag_dfe', wombat%kcoag_dfe, 1e-5/86400.0)
+    !    [colloidal dFe remaining at equilibrium] = dFe_sources / coagulation_rate
+    !  At typical conditions of the deep ocean, colloidal dFe will be:
+    !  [colloidal dFe] = 2.18 nM at kcoag_dfe = 1e-8 / 86400.0
+    !  [colloidal dFe] = 0.21 nM at kcoag_dfe = 1e-7 / 86400.0
+    !  [colloidal dFe] = 0.021 nM at kcoag_dfe = 1e-6 / 86400.0
+    call g_tracer_add_param('kcoag_dfe', wombat%kcoag_dfe, 1.0e-7/86400.0)
 
     ! Rate of aggregation of colloidal iron into authigenic Fe particles [s-1]
     !-----------------------------------------------------------------------
@@ -1919,13 +1942,18 @@ module generic_WOMBATlite
     integer, intent(in)                      :: tau
     type(time_type), intent(in)              :: model_time
 
-    integer                         :: isc, iec, jsc, jec, isd, ied, jsd, jed, nk, ntau, i, j
-    real, dimension(:,:,:), pointer :: grid_tmask
-    real                            :: orgflux
-    logical                         :: used
+    integer                            :: isc, iec, jsc, jec, isd, ied, jsd, jed, nk, ntau, i, j
+    real, dimension(:,:,:), pointer    :: grid_tmask
+    integer, dimension(:,:), pointer   :: grid_kmt
+    real                               :: orgflux, boto2, mmol_m3_to_mol_kg
+    real, parameter                    :: epsi = 1.0e-30
+    logical                            :: used
 
     call g_tracer_get_common(isc, iec, jsc, jec, isd, ied, jsd, jed, nk, ntau, &
-        grid_tmask=grid_tmask)
+        grid_tmask=grid_tmask, grid_kmt=grid_kmt)
+
+    ! Unit conversion factor
+    mmol_m3_to_mol_kg = 1.e-3 / wombat%Rho_0
 
     ! Move bottom reservoirs to sediment tracers
     !-----------------------------------------------------------------------
@@ -1933,13 +1961,19 @@ module generic_WOMBATlite
     call g_tracer_get_values(tracer_list, 'detfe', 'btm_reservoir', wombat%detfe_btm, isd, jsd)
     call g_tracer_get_values(tracer_list, 'caco3', 'btm_reservoir', wombat%caco3_btm, isd, jsd)
 
-    ! Calculate burial of deposited detritus (Dunne et al., 2007)
+    ! Calculate burial of deposited detritus (Dunne et al., 2007) and deposited iron (Dale et al., 2015)
     wombat%fbury(:,:) = 0.0
+    wombat%ffebury(:,:) = wombat%ffeburymax ! % iron buried when do_burial == .false. to avoid accumulation
     if (do_burial) then
       do i = isc, iec
         do j = jsc, jec
-          orgflux = wombat%det_btm(i,j) / dt * 86400.0 * 1e3 ! mmol C m-2 day-1
-          wombat%fbury(i,j) = max(0.0, 0.013 + 0.53 * (orgflux / (7.0 + orgflux))**2.0)  ! Eq. 3 Dunne et al. 2007
+          if (grid_kmt(i,j) > 0) then
+            orgflux = wombat%det_btm(i,j) / dt * 86400.0 * 1e3 ! mmol C m-2 day-1
+            wombat%fbury(i,j) = max(0.0, 0.013 + 0.53 * (orgflux / (7.0 + orgflux))**2.0)  ! Eq. 3 Dunne et al. 2007
+            boto2 = wombat%sedo2(i,j) / mmol_m3_to_mol_kg
+            wombat%ffebury(i,j) = wombat%ffeburymin + (wombat%ffeburymax - wombat%ffeburymin) &
+                                  * (1.0 - tanh(orgflux / max(epsi, boto2))) ! Dale et al., 2015
+          endif
         enddo
       enddo
     endif
@@ -1949,7 +1983,7 @@ module generic_WOMBATlite
     call g_tracer_set_values(tracer_list, 'det', 'btm_reservoir', 0.0)
 
     call g_tracer_get_pointer(tracer_list, 'detfe_sediment', 'field', wombat%p_detfe_sediment)
-    wombat%p_detfe_sediment(:,:,1) = wombat%p_detfe_sediment(:,:,1) + wombat%detfe_btm(:,:) * (1.0-wombat%fbury(:,:)) ! [mol/m2]
+    wombat%p_detfe_sediment(:,:,1) = wombat%p_detfe_sediment(:,:,1) + wombat%detfe_btm(:,:) * (1.0 - wombat%ffebury(:,:)) ! [mol/m2]
     call g_tracer_set_values(tracer_list, 'detfe', 'btm_reservoir', 0.0)
 
     call g_tracer_get_pointer(tracer_list, 'caco3_sediment', 'field', wombat%p_caco3_sediment)
@@ -1972,6 +2006,10 @@ module generic_WOMBATlite
 
     if (wombat%id_fbury > 0) &
       used = g_send_data(wombat%id_fbury, wombat%fbury, model_time, &
+          rmask=grid_tmask(:,:,1), is_in=isc, js_in=jsc, ie_in=iec, je_in=jec)
+
+    if (wombat%id_ffebury > 0) &
+      used = g_send_data(wombat%id_ffebury, wombat%ffebury, model_time, &
           rmask=grid_tmask(:,:,1), is_in=isc, js_in=jsc, ie_in=iec, je_in=jec)
 
   end subroutine generic_WOMBATlite_update_from_bottom
@@ -2074,7 +2112,9 @@ module generic_WOMBATlite
     real                                    :: phy_mmolm3, zoo_mmolm3, det_mmolm3, no3_mmolm3
     real                                    :: fe_umolm3, caco3_mmolm3, phyfe_mmolm3, o2_mmolm3
     real                                    :: fbc, zval, zval1, zval2
-    real                                    :: P_expl, k_loss, k_loss_zoodiss
+    real                                    :: P_expl, k_loss
+    real                                    :: k_zoodiss
+    real                                    :: k_fecoag2det, fecoag2det_offset, k_dfeupt
     real, parameter                         :: epsi = 1.0e-30
     integer                                 :: ichl, iter
     real                                    :: par_phy_mldsum, par_z_mldsum
@@ -2093,7 +2133,7 @@ module generic_WOMBATlite
     real                                    :: zoo_slmor, o2lim
     real                                    :: hco3, ddic, do2_sink
     real                                    :: dzt_bot, dzt_bot_os
-    real, dimension(:,:,:,:), allocatable   :: n_pools, c_pools
+    real, dimension(:,:,:,:), allocatable   :: n_pools, c_pools, fe_pools
     logical                                 :: used
 
     character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_update_from_source'
@@ -2237,7 +2277,7 @@ module generic_WOMBATlite
        call FMS_ocmip2_co2calc(CO2_dope_vec, grid_tmask(:,:,k), &
            Temp(:,:,k), Salt(:,:,k), &
            max(0.0, wombat%p_dic(:,:,k,tau)), &
-           max(1e-9, wombat%p_no3(:,:,k,tau) / 16.), &
+           max(0.0, wombat%p_no3(:,:,k,tau) / 16.), &
            wombat%sio2(:,:), &
            max(0.0, wombat%p_alk(:,:,k,tau)), &
            wombat%htotallo(:,:), wombat%htotalhi(:,:), &
@@ -2257,7 +2297,7 @@ module generic_WOMBATlite
        call FMS_ocmip2_co2calc(CO2_dope_vec, grid_tmask(:,:,k), &
            Temp(:,:,k), Salt(:,:,k), &
            max(0.0, wombat%p_dic(:,:,k,tau)), &
-           max(1e-9, wombat%p_no3(:,:,k,tau) / 16.), &
+           max(0.0, wombat%p_no3(:,:,k,tau) / 16.), &
            wombat%sio2(:,:), &
            max(0.0, wombat%p_alk(:,:,k,tau)), &
            wombat%htotallo(:,:), wombat%htotalhi(:,:), &
@@ -2291,7 +2331,6 @@ module generic_WOMBATlite
     wombat%ligK(:,:,:) = 0.0
     wombat%felig(:,:,:) = 0.0
     wombat%fecol(:,:,:) = 0.0
-    wombat%feprecip(:,:,:) = 0.0
     wombat%fescaven(:,:,:) = 0.0
     wombat%fescadet(:,:,:) = 0.0
     wombat%fesources(:,:,:) = 0.0
@@ -2327,6 +2366,7 @@ module generic_WOMBATlite
     wombat%pocdiss(:,:,:) = 0.0
     wombat%zeuphot(:,:) = 0.0
     wombat%fbury(:,:) = 0.0
+    wombat%ffebury(:,:) = 0.0
     wombat%fdenit(:,:) = 0.0
     wombat%seddep(:,:) = 0.0
     wombat%sedmask(:,:) = 0.0
@@ -2354,6 +2394,7 @@ module generic_WOMBATlite
     allocate(par_bgr_top(nk,3)); par_bgr_top(:,:)=0.0
     allocate(n_pools(isc:iec,jsc:jec,nk,2)); n_pools(:,:,:,:)=0.0
     allocate(c_pools(isc:iec,jsc:jec,nk,2)); c_pools(:,:,:,:)=0.0
+    allocate(fe_pools(isc:iec,jsc:jec,nk,2)); fe_pools(:,:,:,:)=0.0
 
     ! Set the maximum index for euphotic depth
     ! dts: in WOMBAT v3, kmeuph and k100 are integers but here they are arrays since zw
@@ -2542,11 +2583,13 @@ module generic_WOMBATlite
     ! Arrays for assessing conservation of mass within ecosystem component
     n_pools(:,:,:,:) = 0.0
     c_pools(:,:,:,:) = 0.0
+    fe_pools(:,:,:,:) = 0.0
 
     do tn = 1,ts_npzd  !{
 
       n_pools(:,:,:,1) = n_pools(:,:,:,2)
       c_pools(:,:,:,1) = c_pools(:,:,:,2)
+      fe_pools(:,:,:,1) = fe_pools(:,:,:,2)
 
       do k = 1,nk; do j = jsc,jec; do i = isc,iec;
 
@@ -2697,22 +2740,24 @@ module generic_WOMBATlite
       ! 2. Ensure that dFe uptake increases or decreases in response to cell quota
       ! 3. Iron uptake of phytoplankton (reduced 10-fold in darkness)
 
-      if (wombat%p_phy(i,j,k,tau) > epsi) then
-        phy_maxqfe = phy_mmolm3 * wombat%phymaxqf  !mmol Fe / m3
+      phy_maxqfe = phy_mmolm3 * wombat%phymaxqf  !mmol Fe / m3
+      if (phy_p > epsi) then
         wombat%phy_feupreg(i,j,k) = (4.0 - 4.5 * wombat%phy_lfer(i,j,k) / &
                                     (wombat%phy_lfer(i,j,k) + 0.5) )
         wombat%phy_fedoreg(i,j,k) = max(0.0, (1.0 - phyfe_mmolm3/phy_maxqfe) / &
                                     abs(1.05 - phyfe_mmolm3/phy_maxqfe) )
-        wombat%phy_dfeupt(i,j,k) = (wombat%phy_mumax(i,j,k) * phy_maxqfe * &
-                                    max(0.01, wombat%phy_lpar(i,j,k))**0.5 * &
-                                    fe_umolm3 / (fe_umolm3 + wombat%phy_kfe(i,j,k)) * &
-                                    wombat%phy_feupreg(i,j,k) * &
-                                    wombat%phy_fedoreg(i,j,k)) * mmol_m3_to_mol_kg
       else
-        wombat%phy_feupreg(i,j,k) = 0.0
-        wombat%phy_fedoreg(i,j,k) = 0.0
-        wombat%phy_dfeupt(i,j,k) = 0.0
+        wombat%phy_feupreg(i,j,k) = 1.0
+        wombat%phy_fedoreg(i,j,k) = 1.0
       endif
+
+      ! wombat%phy_dfeupt is handled semi-implicitly. Calculate the semi-implicit rate
+      ! constant to be applied in the application of the tracer tendencies (dissolved Fe
+      ! equation). Note, only the numerator of the Monod term is treated implicitly
+      k_dfeupt = wombat%phy_mumax(i,j,k) * phy_maxqfe * &
+                max(0.01, wombat%phy_lpar(i,j,k))**0.5 * &
+                wombat%phy_feupreg(i,j,k) * wombat%phy_fedoreg(i,j,k) * mmol_m3_to_mol_kg &
+                / ((fe_umolm3 + wombat%phy_kfe(i,j,k)) * umol_m3_to_mol_kg)
 
 
       !-----------------------------------------------------------------------!
@@ -2724,7 +2769,7 @@ module generic_WOMBATlite
       !-----------------------------------------------------------------------!
 
       ! Estimate solubility of Fe3+ (free Fe) in solution using temperature,
-      ! pH and salinity using the equations of Liu & Millero (2002)
+      ! pH and salinity using the equations of Liu & Millero (1999)
       ztemk = max(5.0, Temp(i,j,k)) + 273.15    ! temperature in kelvin
       I_ztemk = 1.0 / ztemk
       zval = 19.924 * Salt(i,j,k) / ( 1000. - 1.005 * Salt(i,j,k))
@@ -2759,7 +2804,7 @@ module generic_WOMBATlite
       ! comes from Ye et al. (2020) and increases binding strength at lower pH and higher
       ! concentrations of DOC.
       fe_sfe = max(0.0, fe_umolm3 - wombat%fecol(i,j,k))
-      biodoc = 40.0 + (1.0 - min(wombat%phy_lnit(i,j,k), wombat%phy_lfer(i,j,k))) * 40.0 ! proxy of DOC (mmol/m3)
+      biodoc = 40.0 + (1.0 - wombat%phy_lnit(i,j,k)) * 40.0 ! proxy of DOC (mmol/m3)
       wombat%ligK(i,j,k) = 1e-9 * ( 10.0**( (17.27 - 1565.7 * I_ztemk ) &
                                   - 0.7 * wombat%radbio(i,j,k) / (wombat%radbio(i,j,k) + 10.0) ) &
                                   + 10.0**( (-2e-4*biodoc + 0.034)*biodoc  - 1.67*(-log10(hp)) + 24.36 ) )
@@ -2793,9 +2838,6 @@ module generic_WOMBATlite
       endif
       wombat%felig(i,j,k) = max(0.0, fe_sfe - wombat%feIII(i,j,k))
 
-      ! Precipitation of Fe' (creation of nanoparticles)
-      wombat%feprecip(i,j,k) = max(0.0, ( wombat%feIII(i,j,k) - fe3sol ) ) * wombat%knano_dfe
-
       ! Scavenging of Fe` onto biogenic particles
       partic = (det_mmolm3*2 + caco3_mmolm3*8.3)
       wombat%fescaven(i,j,k) = wombat%feIII(i,j,k) * (1e-7/86400.0 + wombat%kscav_dfe * partic)
@@ -2803,6 +2845,8 @@ module generic_WOMBATlite
 
       ! Coagulation of colloidal Fe (umol/m3) to form sinking particles (mmol/m3)
       ! Following Tagliabue et al. (2023), make coagulation rate dependent on DOC and Phytoplankton biomass
+      ! wombat%fecoag2det is handled semi-implicitly. Calculate the semi-implicit rate constant
+      ! to be applied in the application of the tracer tendencies (dissolved Fe equation).
       biof = max(1/3., phy_mmolm3 / (phy_mmolm3 + 0.03))
       if (wombat%zw(i,j,k)<=hblt_depth(i,j)) then
         zval = (      (12.*biof*biodoc + 9.05*det_mmolm3) &
@@ -2813,13 +2857,25 @@ module generic_WOMBATlite
                 + 2.49*det_mmolm3 + 127.8*biof*biodoc + 725.7*det_mmolm3 )*wombat%kcoag_dfe &
                + wombat%kagg_col * wombat%fecol(i,j,k)**4 / (wombat%fecol(i,j,k)**4 + wombat%kagg_kcol**4)
       endif
-      wombat%fecoag2det(i,j,k) = wombat%fecol(i,j,k) * zval
+      if (.not. do_colloidal_shunt) then
+        k_fecoag2det = 0.0
+        fecoag2det_offset = 0.0
+
+      ! Semi-implicit handling of each part of fecol = max(0.1*fe, fe-fe3sol), which is
+      ! piecewise-linear in fe
+      else if (0.9 * fe_umolm3 <= fe3sol) then
+        ! fecol = 0.1*fe (floor regime): purely proportional to fe, no offset
+        k_fecoag2det = 0.1 * zval
+        fecoag2det_offset = 0.0
+      else
+        ! fecol = fe - fe3sol (excess-over-solubility regime)
+        k_fecoag2det = zval
+        fecoag2det_offset = zval * fe3sol * umol_m3_to_mol_kg
+      endif
 
       ! Convert the terms back to mol/kg
-      wombat%feprecip(i,j,k) = wombat%feprecip(i,j,k) * umol_m3_to_mol_kg
       wombat%fescaven(i,j,k) = wombat%fescaven(i,j,k) * umol_m3_to_mol_kg
       wombat%fescadet(i,j,k) = wombat%fescadet(i,j,k) * umol_m3_to_mol_kg
-      wombat%fecoag2det(i,j,k) = wombat%fecoag2det(i,j,k) * umol_m3_to_mol_kg
       wombat%feIII(i,j,k) = wombat%feIII(i,j,k) * umol_m3_to_mol_kg
       wombat%ligK(i,j,k) = wombat%ligK(i,j,k) * 1e9 ! PJB: convert back to L/mol
       wombat%felig(i,j,k) = wombat%felig(i,j,k) * umol_m3_to_mol_kg
@@ -2835,21 +2891,13 @@ module generic_WOMBATlite
       !-----------------------------------------------------------------------!
 
       ! NOTE: wombat%phymorq, wombat%zoomorq and wombat%detremi are now handled semi-implicitly
-      ! and are calculated in Step 12
+      ! and are calculated in the application of the tracer tendencies
 
-      if (phy_mmolm3 > 1e-3) then
-        wombat%phymorl(i,j,k) = wombat%phylmor * fbc * phy_p ! [molC/kg/s]
-      else
-        wombat%phymorl(i,j,k) = 0.0
-      endif
+      wombat%phymorl(i,j,k) = wombat%phylmor * fbc * phy_p ! [molC/kg/s]
 
-      if (zoo_mmolm3 > 1e-3) then
-        ! reduce linear mortality (respiration losses) of zooplankton when there is low biomass
-        zoo_slmor = zoo_mmolm3 / (zoo_mmolm3 + wombat%zookz)
-        wombat%zoomorl(i,j,k) = wombat%zoolmor * fbc * zoo_p * zoo_slmor ! [molC/kg/s]
-      else
-        wombat%zoomorl(i,j,k) = 0.0
-      endif
+      ! reduce linear mortality (respiration losses) of zooplankton when there is low biomass
+      zoo_slmor = zoo_mmolm3 / (zoo_mmolm3 + wombat%zookz)
+      wombat%zoomorl(i,j,k) = wombat%zoolmor * fbc * zoo_p * zoo_slmor ! [molC/kg/s]
 
 
       !-----------------------------------------------------------------------!
@@ -2883,7 +2931,7 @@ module generic_WOMBATlite
       zval2 = (wombat%zooprefdet(i,j,k) * det_mmolm3)**2
       Xzoo = (  wombat%zooepsphy * zval1 + wombat%zooepsdet * zval2 )
 
-      ! Oxygen limitation term reducing zooplankton grazing pressure in low-oxygen waters (following Buchanan et al., 2025; Science)
+      ! Oxygen limitation term reducing zooplankton grazing pressure in low-oxygen waters
       o2lim = max(0.0, min(1.0, 1.0 - exp(-o2_mmolm3/10.0)))
 
       ! Grazing rate of zooplankton
@@ -2901,6 +2949,7 @@ module generic_WOMBATlite
         wombat%zoograzphy(i,j,k) = g_zoo * zoo_p * ( wombat%zooepsphy * zval1 * I_Xzoo )! [molC/kg/s]
         wombat%zoograzdet(i,j,k) = g_zoo * zoo_p * ( wombat%zooepsdet * zval2 * I_Xzoo ) ! [molC/kg/s]
       else
+        wombat%zooeps(i,j,k) = 0.0
         wombat%zoograzphy(i,j,k) = 0.0
         wombat%zoograzdet(i,j,k) = 0.0
       endif
@@ -2925,9 +2974,6 @@ module generic_WOMBATlite
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
 
-      ! NOTE: wombat%zoodiss, wombat%caldiss, wombat%aradiss and wombat%pocdiss are now handled
-      ! implicitly and are calculated in Step 12
-
       if (do_caco3_dynamics) then
         ! PIC:POC ratio is a function of the substrate:inhibitor ratio, which is the
         !  HCO3- to free H+ ions ratio (mol/umol), following Lehmann & Bach (2024).
@@ -2950,6 +2996,13 @@ module generic_WOMBATlite
         wombat%dissratcal(i,j,k) = wombat%caco3lrem
         wombat%dissratara(i,j,k) = 0.0
         wombat%dissratpoc(i,j,k) = 0.0
+      endif
+
+      ! wombat%zoodiss is handled semi-implicitly. Calculate the semi-implicit rate constant to
+      ! be applied in the application of the tracer tendencies (CaCO3 equation).
+      k_zoodiss = 0.0
+      if (det_p > epsi) then
+        k_zoodiss = max(0.0, wombat%zoograzdet(i,j,k) * wombat%fgutdiss / det_p)
       endif
 
 
@@ -2986,24 +3039,20 @@ module generic_WOMBATlite
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
 
-      ! Phytoplankton equation ! [molC/kg]
+      ! Phytoplankton equation (semi-implicit) ! [molC/kg]
       !-----------------------------------------------------------------------
-      ! Here we treat phymorq semi-implicitly to ensure numerical stability
-      ! See https://github.com/ACCESS-NRI/GFDL-generic-tracers/issues/96
       P_expl = wombat%phygrow(i,j,k) - &
                 wombat%phymorl(i,j,k) - &
                 wombat%zoograzphy(i,j,k)
-      if (phy_mmolm3 > 1e-10) then
-        ! Treat phymorq semi-implicitly
-        k_loss = wombat%phyqmor / mmol_m3_to_mol_kg * wombat%p_phy(i,j,k,tau)
-        wombat%p_phy(i,j,k,tau) = (wombat%p_phy(i,j,k,tau) + dtsb * P_expl) / (1.0 + dtsb * k_loss)
+      ! phymorq is quadratic in phy. The non-implicit factor uses the concentration after
+      ! applying the explicit tendencies
+      zval1 = max(0.0, wombat%p_phy(i,j,k,tau) + dtsb * P_expl)
+      zval2 = min(0.0, wombat%p_phy(i,j,k,tau) + dtsb * P_expl)
+      k_loss = wombat%phyqmor / mmol_m3_to_mol_kg * zval1
+      wombat%p_phy(i,j,k,tau) = zval2 + zval1 / (1.0 + dtsb * k_loss)
 
-        ! Back-calculate phymorq for use below and for diagnostic output
-        wombat%phymorq(i,j,k) = k_loss * wombat%p_phy(i,j,k,tau) ! [molC/kg/s]
-      else
-        wombat%p_phy(i,j,k,tau) = wombat%p_phy(i,j,k,tau) + dtsb * P_expl
-        wombat%phymorq(i,j,k) = 0.0
-      endif
+      ! Back-calculate phymorq for use below and for diagnostic output
+      wombat%phymorq(i,j,k) = k_loss * wombat%p_phy(i,j,k,tau) ! [molC/kg/s]
 
       ! Phytoplankton chlorophyll equation ! [molChl/kg]
       !-----------------------------------------------------------------------
@@ -3013,35 +3062,23 @@ module generic_WOMBATlite
                                 wombat%phymorq(i,j,k) * phy_chlc - &
                                 wombat%zoograzphy(i,j,k) * phy_chlc )
 
-      ! Phytoplankton iron equation ! [molFe/kg]
-      !-----------------------------------------------------------------------
-      wombat%p_phyfe(i,j,k,tau)  = wombat%p_phyfe(i,j,k,tau) + dtsb * ( &
-                                 wombat%phy_dfeupt(i,j,k) - &
-                                 wombat%phymorl(i,j,k) * phy_Fe2C - &
-                                 wombat%phymorq(i,j,k) * phy_Fe2C - &
-                                 wombat%zoograzphy(i,j,k) * phy_Fe2C )
-
       ! Net primary productivity ! [molC/kg/s]
       wombat%npp3d(i,j,k) = wombat%npp3d(i,j,k) + dtsb * (wombat%phygrow(i,j,k))
 
-      ! Zooplankton equation ! [molC/kg]
+      ! Zooplankton equation (semi-implicit) ! [molC/kg]
       !-----------------------------------------------------------------------
-      ! Here we treat zoomorq semi-implicitly to ensure numerical stability
-      ! See https://github.com/ACCESS-NRI/GFDL-generic-tracers/issues/96
       P_expl = wombat%zooassiphy(i,j,k) + &
                 wombat%zooassidet(i,j,k) - &
                 wombat%zoomorl(i,j,k)
-      if (zoo_mmolm3 > 1e-10) then
-        ! Treat zoomorq semi-implicitly
-        k_loss = wombat%zooqmor / mmol_m3_to_mol_kg * wombat%p_zoo(i,j,k,tau)
-        wombat%p_zoo(i,j,k,tau) = (wombat%p_zoo(i,j,k,tau) + dtsb * P_expl) / (1.0 + dtsb * k_loss)
+      ! zoomorq is quadratic in zoo. The non-implicit factor uses the concentration after
+      ! applying the explicit tendencies
+      zval1 = max(0.0, wombat%p_zoo(i,j,k,tau) + dtsb * P_expl)
+      zval2 = min(0.0, wombat%p_zoo(i,j,k,tau) + dtsb * P_expl)
+      k_loss = wombat%zooqmor / mmol_m3_to_mol_kg * zval1
+      wombat%p_zoo(i,j,k,tau) = zval2 + zval1 / (1.0 + dtsb * k_loss)
 
-        ! Back-calculate zoomorq for use below and diagnostic output
-        wombat%zoomorq(i,j,k) = k_loss * wombat%p_zoo(i,j,k,tau) ! [molC/kg/s]
-      else
-        wombat%p_zoo(i,j,k,tau) = wombat%p_zoo(i,j,k,tau) + dtsb * P_expl
-        wombat%zoomorq(i,j,k) = 0.0
-      endif
+      ! Back-calculate zoomorq for use below and diagnostic output
+      wombat%zoomorq(i,j,k) = k_loss * wombat%p_zoo(i,j,k,tau) ! [molC/kg/s]
 
       ! Zooplankton iron equation ! [molFe/kg]
       !-----------------------------------------------------------------------
@@ -3056,26 +3093,22 @@ module generic_WOMBATlite
                               wombat%zooCingest*wombat%zooCassim * &
                               (wombat%zoograzphy(i,j,k) + wombat%zoograzdet(i,j,k))
 
-      ! Detritus equation ! [molC/kg]
+      ! Detritus equation (semi-implicit) ! [molC/kg]
       !-----------------------------------------------------------------------
-      ! Here we treat detremi semi-implicitly to ensure numerical stability
-      ! See https://github.com/ACCESS-NRI/GFDL-generic-tracers/issues/96
       P_expl = wombat%zooegesphy(i,j,k) + &
                 wombat%zooegesdet(i,j,k) + &
                 wombat%phymorq(i,j,k) + &
                 wombat%zoomorq(i,j,k) - &
                 wombat%zoograzdet(i,j,k)
-      if (wombat%p_det(i,j,k,tau) > epsi) then
-        ! Treat detremi semi-implicitly
-        k_loss = wombat%reminr(i,j,k) / mmol_m3_to_mol_kg * wombat%p_det(i,j,k,tau)
-        wombat%p_det(i,j,k,tau) = (wombat%p_det(i,j,k,tau) + dtsb * P_expl) / (1.0 + dtsb * k_loss)
+      ! detremi is quadratic in det. The non-implicit factor uses the concentration after
+      ! applying the explicit tendencies
+      zval1 = max(0.0, wombat%p_det(i,j,k,tau) + dtsb * P_expl)
+      zval2 = min(0.0, wombat%p_det(i,j,k,tau) + dtsb * P_expl)
+      k_loss = wombat%reminr(i,j,k) / mmol_m3_to_mol_kg * zval1
+      wombat%p_det(i,j,k,tau) = zval2 + zval1 / (1.0 + dtsb * k_loss)
 
-        ! Back-calculate detremi for use below and diagnostic output
-        wombat%detremi(i,j,k) = k_loss * wombat%p_det(i,j,k,tau) ! [molC/kg/s]
-      else
-        wombat%p_det(i,j,k,tau) = wombat%p_det(i,j,k,tau) + dtsb * P_expl
-        wombat%detremi(i,j,k) = 0.0
-      endif
+      ! Back-calculate detremi for use below and diagnostic output
+      wombat%detremi(i,j,k) = k_loss * wombat%p_det(i,j,k,tau) ! [molC/kg/s]
 
       ! Nitrate equation ! [molN/kg]
       !----------------------------------------------------------------------
@@ -3088,6 +3121,33 @@ module generic_WOMBATlite
                               wombat%phygrow(i,j,k) )
       if (do_nitrogen_fixation) &
         wombat%p_no3(i,j,k,tau) = wombat%p_no3(i,j,k,tau) + dtsb * wombat%nitrfix(i,j,k)
+
+      ! Equation for dissolved iron (semi-implicit) ! [molFe/kg]
+      !-----------------------------------------------------------------------
+      P_expl = wombat%detremi(i,j,k) * det_Fe2C + &
+                wombat%zoomorl(i,j,k) * zoo_Fe2C + &
+                zooexcrphyfe + &
+                zooexcrdetfe + &
+                wombat%phymorl(i,j,k) * phy_Fe2C - &
+                wombat%fescaven(i,j,k) + &
+                fecoag2det_offset
+      ! Unlike in other semi-implicit equations, fecoag2det and dfeupt use the pre-update fe
+      ! concentration for the non-implicit factors, not the concentration after applying the
+      ! explicit tendencies.
+      k_loss = k_fecoag2det + k_dfeupt
+      wombat%p_fe(i,j,k,tau) = (wombat%p_fe(i,j,k,tau) + dtsb * P_expl) / (1.0 + dtsb * k_loss)
+
+      ! Back-calculate fecoag2det and phy_dfeupt for use below and diagnostic output
+      wombat%fecoag2det(i,j,k) = k_fecoag2det * wombat%p_fe(i,j,k,tau) - fecoag2det_offset
+      wombat%phy_dfeupt(i,j,k) = k_dfeupt * wombat%p_fe(i,j,k,tau)
+
+      ! Phytoplankton iron equation ! [molFe/kg]
+      !-----------------------------------------------------------------------
+      wombat%p_phyfe(i,j,k,tau)  = wombat%p_phyfe(i,j,k,tau) + dtsb * ( &
+                                 wombat%phy_dfeupt(i,j,k) - &
+                                 wombat%phymorl(i,j,k) * phy_Fe2C - &
+                                 wombat%phymorq(i,j,k) * phy_Fe2C - &
+                                 wombat%zoograzphy(i,j,k) * phy_Fe2C )
 
       ! Detrital iron equation ! [molFe/kg]
       !-----------------------------------------------------------------------
@@ -3103,7 +3163,7 @@ module generic_WOMBATlite
 
       ! Oxygen equation ! [molO2/kg]
       !-----------------------------------------------------------------------
-      wombat%p_o2(i,j,k,tau) = wombat%p_o2(i,j,k,tau) - 172./122. * dtsb * ( &
+      wombat%p_o2(i,j,k,tau) = wombat%p_o2(i,j,k,tau) - 164./122. * dtsb * ( &
                              wombat%detremi(i,j,k) + &
                              wombat%zoomorl(i,j,k) + &
                              wombat%zooexcrphy(i,j,k) + &
@@ -3111,33 +3171,24 @@ module generic_WOMBATlite
                              wombat%phymorl(i,j,k) - &
                              wombat%phygrow(i,j,k) )
 
-      ! Equation for CaCO3 ! [molCaCO3/kg]
+      ! Equation for CaCO3 (semi-implicit) ! [molCaCO3/kg]
       !-----------------------------------------------------------------------
-      ! Here we treat the loss terms implicitly to ensure numerical stability
-      ! See https://github.com/ACCESS-NRI/GFDL-generic-tracers/issues/96
-      ! Treat the production terms explicitly
       P_expl = wombat%phymorq(i,j,k) * wombat%pic2poc(i,j,k) + &
                 wombat%zoomorq(i,j,k) * wombat%pic2poc(i,j,k) + &
                 wombat%zoograzphy(i,j,k) * (1. - wombat%fgutdiss) * wombat%pic2poc(i,j,k)
-      if (wombat%p_caco3(i,j,k,tau) > epsi) then
-          ! Treat loss terms that are proportional to CaCO3 concentration implicitly
-          k_loss_zoodiss = wombat%zoograzdet(i,j,k) * wombat%fgutdiss / max(epsi, det_p)
-          k_loss = wombat%dissratcal(i,j,k) + wombat%dissratara(i,j,k) + wombat%dissratpoc(i,j,k) &
-                        + k_loss_zoodiss
-          wombat%p_caco3(i,j,k,tau) = (wombat%p_caco3(i,j,k,tau) + dtsb * P_expl) / (1.0 + dtsb * k_loss)
+      ! zoodiss, caldiss, aradiss and pocdiss are linear in caco3.
+      k_loss = wombat%dissratcal(i,j,k) + wombat%dissratara(i,j,k) + wombat%dissratpoc(i,j,k) &
+                    + k_zoodiss
+      zval1 = max(0.0, (wombat%p_caco3(i,j,k,tau) + dtsb * P_expl))
+      zval2 = min(0.0, (wombat%p_caco3(i,j,k,tau) + dtsb * P_expl))
+      zval = zval1 / (1.0 + dtsb * k_loss)
+      wombat%p_caco3(i,j,k,tau) = zval2 + zval
 
-          ! Back-calculate the dissolution terms for use below and diagnostic output
-          wombat%zoodiss(i,j,k) = k_loss_zoodiss * wombat%p_caco3(i,j,k,tau)
-          wombat%caldiss(i,j,k) = wombat%dissratcal(i,j,k) * wombat%p_caco3(i,j,k,tau)
-          wombat%aradiss(i,j,k) = wombat%dissratara(i,j,k) * wombat%p_caco3(i,j,k,tau)
-          wombat%pocdiss(i,j,k) = wombat%dissratpoc(i,j,k) * wombat%p_caco3(i,j,k,tau)
-      else
-          wombat%p_caco3(i,j,k,tau) = wombat%p_caco3(i,j,k,tau) + dtsb * P_expl
-          wombat%zoodiss(i,j,k) = 0.0
-          wombat%caldiss(i,j,k) = 0.0
-          wombat%aradiss(i,j,k) = 0.0
-          wombat%pocdiss(i,j,k) = 0.0
-      end if
+      ! Back-calculate the dissolution terms for use below and diagnostic output
+      wombat%zoodiss(i,j,k) = k_zoodiss * zval
+      wombat%caldiss(i,j,k) = wombat%dissratcal(i,j,k) * zval
+      wombat%aradiss(i,j,k) = wombat%dissratara(i,j,k) * zval
+      wombat%pocdiss(i,j,k) = wombat%dissratpoc(i,j,k) * zval
 
       ! Equation for DIC ! [molC/kg]
       !-----------------------------------------------------------------------
@@ -3170,19 +3221,6 @@ module generic_WOMBATlite
                               wombat%phymorq(i,j,k) * wombat%pic2poc(i,j,k) - &
                               wombat%zoomorq(i,j,k) * wombat%pic2poc(i,j,k) )
 
-      ! Extra equation for iron ! [molFe/kg]
-      !-----------------------------------------------------------------------
-      wombat%p_fe(i,j,k,tau) = wombat%p_fe(i,j,k,tau) + dtsb * ( &
-                             wombat%detremi(i,j,k) * det_Fe2C + &
-                             wombat%zoomorl(i,j,k) * zoo_Fe2C + &
-                             zooexcrphyfe + &
-                             zooexcrdetfe + &
-                             wombat%phymorl(i,j,k) * phy_Fe2C - &
-                             wombat%phy_dfeupt(i,j,k) - &
-                             wombat%feprecip(i,j,k) - &
-                             wombat%fescaven(i,j,k) - &
-                             wombat%fecoag2det(i,j,k) )
-
       ! Collect dFe sources and sinks for diagnostic output
       wombat%fesources(i,j,k) = wombat%fesources(i,j,k) + dtsb * ( &
                                   wombat%detremi(i,j,k) * det_Fe2C + &
@@ -3192,7 +3230,6 @@ module generic_WOMBATlite
                                   wombat%phymorl(i,j,k) * phy_Fe2C)
       wombat%fesinks(i,j,k) = wombat%fesinks(i,j,k) + dtsb * ( &
                                 wombat%phy_dfeupt(i,j,k) + &
-                                wombat%feprecip(i,j,k) + &
                                 wombat%fescaven(i,j,k) + &
                                 wombat%fecoag2det(i,j,k))
 
@@ -3209,6 +3246,8 @@ module generic_WOMBATlite
                           wombat%p_zoo(i,j,k,tau)) * 16/122.0
       c_pools(i,j,k,2) = wombat%p_dic(i,j,k,tau) + wombat%p_phy(i,j,k,tau) + wombat%p_det(i,j,k,tau) + &
                          wombat%p_zoo(i,j,k,tau) + wombat%p_caco3(i,j,k,tau)
+      fe_pools(i,j,k,2) = wombat%p_fe(i,j,k,tau) + wombat%p_phyfe(i,j,k,tau) + wombat%p_detfe(i,j,k,tau) + &
+                          wombat%p_zoofe(i,j,k,tau)
 
       if (tn>1) then
         if (do_check_n_conserve) then
@@ -3233,7 +3272,7 @@ module generic_WOMBATlite
           endif
         endif
         if (do_check_c_conserve) then
-            if (abs(c_pools(i,j,k,2) - c_pools(i,j,k,1))>1e-16) then
+          if (abs(c_pools(i,j,k,2) - c_pools(i,j,k,1))>1e-16) then
             print *, "--------------------------------------------"
             print *, trim(error_header) // " Ecosystem model is not conserving carbon"
             print *, "       Longitude index =", i
@@ -3259,8 +3298,28 @@ module generic_WOMBATlite
             call mpp_error(FATAL, trim(error_header) // " Terminating run due to non-conservation of tracer")
           endif
         endif
+        if (do_check_fe_conserve) then
+          if (abs(fe_pools(i,j,k,2) - fe_pools(i,j,k,1))>1e-16) then
+            print *, "--------------------------------------------"
+            print *, trim(error_header) // " Ecosystem model is not conserving iron"
+            print *, "       Longitude index =", i
+            print *, "       Latitude index =", j
+            print *, "       Depth index and value =", k, wombat%zm(i,j,k)
+            print *, "       Nested timestep number =", tn
+            print *, " "
+            print *, "       Biological Fe budget (molFe/kg) at two timesteps =", fe_pools(i,j,k,1), fe_pools(i,j,k,2)
+            print *, "       Difference in budget between timesteps =", fe_pools(i,j,k,2) - fe_pools(i,j,k,1)
+            print *, " "
+            print *, "       dFe (molFe/kg) =", wombat%p_fe(i,j,k,tau)
+            print *, "       PHYFe (molFe/kg) =", wombat%p_phyfe(i,j,k,tau)
+            print *, "       ZOOFe (molFe/kg) =", wombat%p_zoofe(i,j,k,tau)
+            print *, "       DETFe (molFe/kg) =", wombat%p_detfe(i,j,k,tau)
+            print *, " "
+            print *, "--------------------------------------------"
+            call mpp_error(FATAL, trim(error_header) // " Terminating run due to non-conservation of tracer")
+          endif
+        endif
       endif
-
 
       enddo; enddo; enddo
     enddo !} nested timestep (ts_npzd)
@@ -3284,13 +3343,12 @@ module generic_WOMBATlite
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
+    ! Note: shallow (<=200m) columns no longer get a bottom-cell dFe overwrite here. Instead
+    ! detfesedfloor is applied to the sediment reservoir (see Step 17).
     do j = jsc,jec; do i = isc,iec;
       if (grid_kmt(i,j) > 0) then
         k = grid_kmt(i,j)
-        if (wombat%zw(i,j,k) <= 200) then
-          ! mac: bottom dFe fix to 1 nM when the water is <= 200 m deep.
-          wombat%p_fe(i,j,k,tau) = umol_m3_to_mol_kg * 0.999 ! [mol/kg]
-        else
+        if (wombat%zw(i,j,k) > 200) then
           do k = 1,nk
             ! pjb: tune minimum dissolved iron concentration to detection limit...
             !       this is essential for ensuring dFe is replenished in upper ocean and actually
@@ -3358,8 +3416,19 @@ module generic_WOMBATlite
     call g_tracer_get_pointer(tracer_list, 'detfe_sediment', 'field', wombat%p_detfe_sediment) ! [mol/m2]
     call g_tracer_get_pointer(tracer_list, 'caco3_sediment', 'field', wombat%p_caco3_sediment) ! [mol/m2]
 
+    ! Ensure adequate detrital Fe supply in shallow waters. This replaces the previous approach
+    ! (taken from WOMBAT legace) of setting the bottom cell dFe concentration to 1 nM.
+    do j = jsc,jec; do i = isc,iec;
+      if (grid_kmt(i,j) > 0) then
+        k = grid_kmt(i,j)
+        if (wombat%zw(i,j,k) <= 200) then
+          wombat%p_detfe_sediment(i,j,1) = max(wombat%detfesedfloor * 1.0e-6, wombat%p_detfe_sediment(i,j,1))
+        endif
+      endif
+    enddo; enddo
+
     ! Get bottom conditions, including those that influence bottom fluxes. Bottom conditions are
-    ! calculated over a layer defined by wombat%bottom_thickness (default 1 m). This is done because
+    ! calculated over a layer defined by wombat%bottom_thickness (default 0.1 m). This is done because
     ! the bottom layers in MOM6 are usually "vanished" layers. This approach is based on what is done
     ! in COBALT v3.
     do j = jsc,jec; do i = isc,iec;
@@ -3411,14 +3480,14 @@ module generic_WOMBATlite
         ! We add these arrays together to simulate the reducing conditions of organic-rich sediments,
         ! and to calculate a lower omega for calcite, which ensures greater rates of dissolution of
         ! CaCO3 within the sediment as organic matter accumulates.
-        wombat%seddic(i,j) = wombat%seddic(i,j) + wombat%p_det_sediment(i,j,1) / wombat%Rho_0
+        wombat%seddic(i,j) = wombat%seddic(i,j) + wombat%p_det_sediment(i,j,1) / wombat%bottom_thickness / wombat%Rho_0
       endif
     enddo; enddo
 
     call FMS_ocmip2_co2calc(CO2_dope_vec, wombat%sedmask(:,:), &
         wombat%sedtemp(:,:), wombat%sedsalt(:,:), &
         max(0.0, wombat%seddic(:,:)), &
-        max(1e-9, wombat%sedno3(:,:) / 16.), &
+        max(0.0, wombat%sedno3(:,:) / 16.), &
         wombat%sio2(:,:), & ! dts: This is currently constant, equal to wombat%sio2_surf
         max(0.0, wombat%sedalk(:,:)), &
         wombat%sedhtotal(:,:)*wombat%htotal_scale_lo, &
@@ -3463,7 +3532,7 @@ module generic_WOMBATlite
       ! Remineralisation of sediments to supply nutrient fields.
       ! btf values are positive from the water column into the sediment.
       wombat%b_no3(i,j) = -16./122. * wombat%det_sed_remin(i,j) + wombat%det_sed_denit(i,j) ! [mol/m2/s]
-      wombat%b_o2(i,j) = 172./122. * wombat%det_sed_remin(i,j) * (1.0 - wombat%fdenit(i,j)) ! [mol/m2/s]
+      wombat%b_o2(i,j) = 164./122. * wombat%det_sed_remin(i,j) * (1.0 - wombat%fdenit(i,j)) ! [mol/m2/s]
       wombat%b_dic(i,j) = -1.0 * wombat%det_sed_remin(i,j) - wombat%caco3_sed_remin(i,j) ! [mol/m2/s]
       wombat%b_fe(i,j) = -1.0 * wombat%detfe_sed_remin(i,j) ! [mol/m2/s]
       wombat%b_alk(i,j) = -2.0 * wombat%caco3_sed_remin(i,j) - wombat%b_no3(i,j) ! [mol/m2/s]
@@ -3612,10 +3681,6 @@ module generic_WOMBATlite
 
     if (wombat%id_fecol > 0) &
       used = g_send_data(wombat%id_fecol, wombat%fecol, model_time, &
-          rmask=grid_tmask, is_in=isc, js_in=jsc, ks_in=1, ie_in=iec, je_in=jec, ke_in=nk)
-
-    if (wombat%id_feprecip > 0) &
-      used = g_send_data(wombat%id_feprecip, wombat%feprecip, model_time, &
           rmask=grid_tmask, is_in=isc, js_in=jsc, ks_in=1, ie_in=iec, je_in=jec, ke_in=nk)
 
     if (wombat%id_fescaven > 0) &
@@ -3883,7 +3948,7 @@ module generic_WOMBATlite
     real, dimension(ilb:,jlb:,:), optional, intent(in) :: dzt
 
     integer                                 :: isc, iec, jsc, jec, isd, ied, jsd, jed, nk, ntau, i, j
-    real                                    :: sal, ST, o2_saturation
+    real                                    :: sal, ST, o2_solubility
     real                                    :: tt, tk, ts, ts2, ts3, ts4, ts5
     real                                    :: mmol_m3_to_mol_kg
     real, dimension(:,:,:), pointer         :: grid_tmask
@@ -3923,10 +3988,10 @@ module generic_WOMBATlite
 
       call FMS_ocmip2_co2calc(CO2_dope_vec, grid_tmask(:,:,1), &
           SST(:,:), SSS(:,:), &
-          max(0.0, wombat%p_dic(:,:,1,1)), &
-          max(1e-9, wombat%p_no3(:,:,1,1) / 16.), &
+          max(0.0, wombat%p_dic(:,:,1,tau)), &
+          max(0.0, wombat%p_no3(:,:,1,tau) / 16.), &
           wombat%sio2(:,:), &
-          max(0.0, wombat%p_alk(:,:,1,1)), &
+          max(0.0, wombat%p_alk(:,:,1,tau)), &
           wombat%htotallo(:,:), wombat%htotalhi(:,:), &
           wombat%htotal(:,:,1), &
           co2_calc=trim(co2_calc), &
@@ -3946,12 +4011,11 @@ module generic_WOMBATlite
 
     do j=jsc,jec ; do i=isc,iec
       !-----------------------------------------------------------------------
-      ! Compute the Schmidt number of CO2 in seawater using the formulation
-      ! presented by Wanninkhof (1992, J. Geophys. Res., 97, 7373-7382).
+      !  Compute the Schmidt number of O2 in seawater using Wanninkhof (2014)
       !-----------------------------------------------------------------------
       ST = SST(i,j)
-      wombat%co2_sc_no(i,j) = wombat%a1_co2 + ST*(wombat%a2_co2 + ST*(wombat%a3_co2 + &
-          ST*wombat%a4_co2)) * grid_tmask(i,j,1)
+      wombat%co2_sc_no(i,j) = wombat%a1_co2 + ST * (wombat%a2_co2 + ST * (wombat%a3_co2 + ST &
+          * (wombat%a4_co2 + ST * wombat%a5_co2))) * grid_tmask(i,j,1)
 
       wombat%co2_alpha(i,j) = wombat%co2_alpha(i,j) * wombat%Rho_0 !nnz: MOM has rho(i,j,1,tau)
       wombat%co2_csurf(i,j) = wombat%co2_csurf(i,j) * wombat%Rho_0 !nnz: MOM has rho(i,j,1,tau)
@@ -3997,22 +4061,19 @@ module generic_WOMBATlite
       ts4 = ts3 * ts
       ts5 = ts4 * ts
 
-      o2_saturation = (1000.0/22391.6) * grid_tmask(i,j,1) *  & !convert from ml/l to mol m-3
+      ! Note that we divide by 0.20946 to convert mol m-3 to mol m-3 atm-1
+      o2_solubility = (1000.0/22391.6) * grid_tmask(i,j,1) *  & !convert from ml/l to mol m-3
           exp( wombat%a_0 + wombat%a_1*ts + wombat%a_2*ts2 + wombat%a_3*ts3 + wombat%a_4*ts4 + &
               wombat%a_5*ts5 + (wombat%b_0 + wombat%b_1*ts + wombat%b_2*ts2 + wombat%b_3*ts3 + &
-              wombat%c_0*sal)*sal)
+              wombat%c_0*sal)*sal) / 0.20946
 
       !-----------------------------------------------------------------------
-      !  Compute the Schmidt number of O2 in seawater using the
-      !  formulation proposed by Keeling et al. (1998, Global Biogeochem.
-      !  Cycles, 12, 141-163).
+      !  Compute the Schmidt number of O2 in seawater using Wanninkhof (2014)
       !-----------------------------------------------------------------------
-      wombat%o2_sc_no(i,j)  = wombat%a1_o2 + ST * (wombat%a2_o2 + ST * (wombat%a3_o2 + ST * &
-          wombat%a4_o2 )) * grid_tmask(i,j,1)
+      wombat%o2_sc_no(i,j) = wombat%a1_o2 + ST * (wombat%a2_o2 + ST * (wombat%a3_o2 + ST &
+          * (wombat%a4_o2 + ST * wombat%a5_o2))) * grid_tmask(i,j,1)
 
-      ! renormalize the alpha value for atm o2
-      ! data table override for o2_flux_pcair_atm is now set to 0.21
-      wombat%o2_alpha(i,j) = (o2_saturation / 0.21)
+      wombat%o2_alpha(i,j) = o2_solubility ! already in mol/m3 atm-1 (see above)
       wombat%o2_csurf(i,j) = wombat%p_o2(i,j,1,tau) * wombat%Rho_0 !nnz: MOM has rho(i,j,1,tau)
     enddo; enddo
 
@@ -4114,7 +4175,6 @@ module generic_WOMBATlite
     allocate(wombat%felig(isd:ied, jsd:jed, 1:nk)); wombat%felig(:,:,:)=0.0
     allocate(wombat%ligK(isd:ied, jsd:jed, 1:nk)); wombat%ligK(:,:,:)=0.0
     allocate(wombat%fecol(isd:ied, jsd:jed, 1:nk)); wombat%fecol(:,:,:)=0.0
-    allocate(wombat%feprecip(isd:ied, jsd:jed, 1:nk)); wombat%feprecip(:,:,:)=0.0
     allocate(wombat%fescaven(isd:ied, jsd:jed, 1:nk)); wombat%fescaven(:,:,:)=0.0
     allocate(wombat%fescadet(isd:ied, jsd:jed, 1:nk)); wombat%fescadet(:,:,:)=0.0
     allocate(wombat%fecoag2det(isd:ied, jsd:jed, 1:nk)); wombat%fecoag2det(:,:,:)=0.0
@@ -4152,6 +4212,7 @@ module generic_WOMBATlite
     allocate(wombat%det_sed_denit(isd:ied, jsd:jed)); wombat%det_sed_denit(:,:)=0.0
     allocate(wombat%det_btm(isd:ied, jsd:jed)); wombat%det_btm(:,:)=0.0
     allocate(wombat%fbury(isd:ied, jsd:jed)); wombat%fbury(:,:)=0.0
+    allocate(wombat%ffebury(isd:ied, jsd:jed)); wombat%ffebury(:,:)=0.0
     allocate(wombat%fdenit(isd:ied, jsd:jed)); wombat%fdenit(:,:)=0.0
     allocate(wombat%detfe_sed_remin(isd:ied, jsd:jed)); wombat%detfe_sed_remin(:,:)=0.0
     allocate(wombat%detfe_btm(isd:ied, jsd:jed)); wombat%detfe_btm(:,:)=0.0
@@ -4188,6 +4249,7 @@ module generic_WOMBATlite
         wombat%htotal, &
         wombat%omega_ara, &
         wombat%omega_cal, &
+        wombat%sio2, &
         wombat%co3, &
         wombat%co2_star, &
         wombat%co2_csurf, &
@@ -4232,7 +4294,6 @@ module generic_WOMBATlite
         wombat%felig, &
         wombat%ligK, &
         wombat%fecol, &
-        wombat%feprecip, &
         wombat%fescaven, &
         wombat%fescadet, &
         wombat%fecoag2det, &
@@ -4243,10 +4304,13 @@ module generic_WOMBATlite
         wombat%phygrow, &
         wombat%phymorl, &
         wombat%phymorq, &
+        wombat%zooprefphy, &
+        wombat%zooprefdet, &
         wombat%zoograzphy, &
         wombat%zoograzdet, &
         wombat%zoomorl, &
         wombat%zoomorq, &
+        wombat%zooeps, &
         wombat%zooexcrphy, &
         wombat%zooexcrdet, &
         wombat%zooassiphy, &
@@ -4267,6 +4331,7 @@ module generic_WOMBATlite
         wombat%det_sed_denit, &
         wombat%det_btm, &
         wombat%fbury, &
+        wombat%ffebury, &
         wombat%fdenit, &
         wombat%detfe_sed_remin, &
         wombat%detfe_btm, &
