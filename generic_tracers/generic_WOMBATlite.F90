@@ -112,6 +112,10 @@
 !   If true, check that the ecosystem model conserves iron
 !  </DATA>
 !
+! <DATA NAME="do_emulator_shadow" TYPE="logical">
+!  If true, evaluate emualtor alongside reminr
+! </DATA>
+!
 ! </NAMELIST>
 !
 !-----------------------------------------------------------------------
@@ -123,6 +127,10 @@ module generic_WOMBATlite
   use fms_mod,           only: write_version_number, check_nml_error, stdout, stdlog
   use time_manager_mod,  only: time_type
   use constants_mod,     only: WTMCO2, WTMO2
+  use ftorch,            only: torch_model, torch_tensor, torch_kCPU, torch_model_load, &
+                               torch_tensor_from_array, torch_model_forward ! AO (16/10/2026)
+  use, intrinsic :: ieee_exceptions, only: ieee_flag_type, ieee_invalid, ieee_overflow, &
+          ieee_divide_by_zero, ieee_get_halting_mode, ieee_set_halting_mode, ieee_set_flag
 
   use g_tracer_utils, only : g_diag_type, g_tracer_type
   use g_tracer_utils, only : g_tracer_start_param_list, g_tracer_end_param_list
@@ -158,6 +166,13 @@ module generic_WOMBATlite
 
   real, parameter :: missing_value1 = -1.0e+10
 
+  ! get ftorch ready
+  logical                           :: remin_ready = .false. ! pre-run checks
+  type(torch_model)                 :: remin_model
+  type(torch_tensor), dimension(1)  :: remin_in, remin_out
+  real(kind=8), allocatable, target :: remin_x1(:,:)  ! (1,4) inputs
+  real(kind=8), allocatable, target :: remin_y1(:)    ! (1) output
+
   !=======================================================================
   ! Namelist Options
   !=======================================================================
@@ -173,11 +188,14 @@ module generic_WOMBATlite
   logical :: do_check_n_conserve        = .false. ! check that the N fluxes balance in the ecosystem
   logical :: do_check_c_conserve        = .false. ! check that the C fluxes balance in the ecosystem
   logical :: do_check_fe_conserve       = .false. ! check that the Fe fluxes balance in the ecosystem
+  logical :: do_emulator_shadow         = .false. ! run emulator alongside remineralsation scheme
+  character(len=256) :: remin_emulator_path = ''  ! hard-code path to emulator
 
   namelist /generic_wombatlite_nml/ co2_calc, do_caco3_dynamics, do_colloidal_shunt, &
                                     do_two_ligands, do_burial, do_nitrogen_fixation, do_benthic_denitrification, &
                                     do_tracer_dicp, do_tracer_dicr, &
-                                    do_check_n_conserve, do_check_c_conserve, do_check_fe_conserve
+                                    do_check_n_conserve, do_check_c_conserve, do_check_fe_conserve, &
+                                    do_emulator_shadow, remin_emulator_path
 
   !=======================================================================
   ! This type contains all the parameters and arrays used in this module
@@ -363,6 +381,7 @@ module generic_WOMBATlite
         zooegesphy, &
         zooegesdet, &
         reminr, &
+        reminr_nn, &
         detremi, &
         pic2poc, &
         dissratcal, &
@@ -458,6 +477,7 @@ module generic_WOMBATlite
         id_zooegesphy = -1, &
         id_zooegesdet = -1, &
         id_reminr = -1, &
+        id_reminr_nn = -1, &
         id_detremi = -1, &
         id_pic2poc = -1, &
         id_dissratcal = -1, &
@@ -517,6 +537,50 @@ module generic_WOMBATlite
   type(CO2_dope_vector) :: CO2_dope_vec
 
   contains
+
+  subroutine wombat_remin_init()
+    logical :: file_exists
+    
+    if (remin_ready) return
+
+    inquire(file=trim(remin_emulator_path), exist=file_exists)
+    if(.not. file_exists) call mpp_error(FATAL, &
+            'generic_WOMBAT_lite: emulator file not found: '//trim(remin_emulator_path))
+
+    allocate(remin_x1(1, 4), remin_y1(1))
+    remin_x1 = 1.0d0  ! dummy value
+    remin_y1 = 0.0d0
+    
+    call torch_model_load(remin_model, trim(remin_emulator_path), torch_kCPU)
+    call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
+    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
+    remin_ready = .true.
+
+  end subroutine wombat_remin_init
+
+  subroutine wombat_remin_point(temp, o2, detr, fe, rate)
+    real(kind=8), intent(in)   :: temp, o2, detr, fe
+    real(kind=8), intent(out)  :: rate
+    type(ieee_flag_type), parameter :: trap_flags(3) = &
+            [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
+    logical :: halting(3)
+
+    remin_x1(1,1) = temp
+    remin_x1(1,2) = o2  
+    remin_x1(1,3) = detr
+    remin_x1(1,4) = fe 
+
+    call ieee_get_halting_mode(trap_flags, halting)
+    call ieee_set_halting_mode(trap_flags, .false.)
+    call torch_model_forward(remin_model, remin_in, remin_out)
+    call ieee_set_flag(trap_flags, .false.)
+    call ieee_set_halting_mode(trap_flags, halting)
+
+    rate = remin_y1(1)
+  end subroutine wombat_remin_point
+
+
+  !#######################################################################
 
   !#######################################################################
   !
@@ -631,6 +695,10 @@ module generic_WOMBATlite
           'Checking that the ecosystem model conserves iron'
     endif
 
+    if (do_emulator_shadow) then
+      call wombat_remin_init()
+    endif
+    
     ! Specify all prognostic and diagnostic tracers of this modules.
     call user_add_tracers(tracer_list)
 
@@ -1099,6 +1167,11 @@ module generic_WOMBATlite
     wombat%id_reminr = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
         init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
 
+    vardesc_temp = vardesc( &
+        'reminr_nn', 'Rate of remineralisation emulator', 'h', 'L', 's', '/s', 'f')
+    wombat%id_reminr_nn = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
+        init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
+    
     vardesc_temp = vardesc( &
         'detremi', 'Remineralisation of detritus', 'h', 'L', 's', 'molC/kg/s', 'f')
     wombat%id_detremi = register_diag_field(package_name, vardesc_temp%name, axes(1:3), &
@@ -2355,6 +2428,7 @@ module generic_WOMBATlite
     wombat%zooegesphy(:,:,:) = 0.0
     wombat%zooegesdet(:,:,:) = 0.0
     wombat%reminr(:,:,:) = 0.0
+    wombat%reminr_nn(:,:,:) = 0.0
     wombat%detremi(:,:,:) = 0.0
     wombat%pic2poc(:,:,:) = 0.0
     wombat%dissratcal(:,:,:) = 0.0
@@ -2665,6 +2739,12 @@ module generic_WOMBATlite
       o2lim = max(0.0, min(1.0, 1.0 - exp(-o2_mmolm3)))
       wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
 
+       
+      ! emmulator shadow
+      if (do_emulator_shadow) then
+        call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
+        wombat%reminr_nn(i,j,k) = min(remin_rate, (zval*mmol_m3_to_mol_kg)/dtsb)
+      endif
 
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
@@ -3779,7 +3859,11 @@ module generic_WOMBATlite
       used = g_send_data(wombat%id_reminr, wombat%reminr, model_time, &
           rmask=grid_tmask, is_in=isc, js_in=jsc, ks_in=1, ie_in=iec, je_in=jec, ke_in=nk)
 
-    if (wombat%id_detremi > 0) &
+    if (wombat%id_reminr_nn > 0) &
+      used = g_send_data(wombat%id_reminr_nn, wombat%reminr_nn, model_time, &
+          rmask=grid_tmask, is_in=isc, js_in=jsc, ks_in=1, ie_in=iec, je_in=jec, ke_in=nk)
+    
+   if (wombat%id_detremi > 0) &
       used = g_send_data(wombat%id_detremi, wombat%detremi, model_time, &
           rmask=grid_tmask, is_in=isc, js_in=jsc, ks_in=1, ie_in=iec, je_in=jec, ke_in=nk)
 
@@ -4199,6 +4283,7 @@ module generic_WOMBATlite
     allocate(wombat%zooegesphy(isd:ied, jsd:jed, 1:nk)); wombat%zooegesphy(:,:,:)=0.0
     allocate(wombat%zooegesdet(isd:ied, jsd:jed, 1:nk)); wombat%zooegesdet(:,:,:)=0.0
     allocate(wombat%reminr(isd:ied, jsd:jed, 1:nk)); wombat%reminr(:,:,:)=0.0
+    allocate(wombat%reminr_nn(isd:ied, jsd:jed, 1:nk)); wombat%reminr_nn(:,:,:)=0.0
     allocate(wombat%detremi(isd:ied, jsd:jed, 1:nk)); wombat%detremi(:,:,:)=0.0
     allocate(wombat%pic2poc(isd:ied, jsd:jed, 1:nk)); wombat%pic2poc(:,:,:)=0.0
     allocate(wombat%dissratcal(isd:ied, jsd:jed, 1:nk)); wombat%dissratcal(:,:,:)=0.0
@@ -4318,6 +4403,7 @@ module generic_WOMBATlite
         wombat%zooegesphy, &
         wombat%zooegesdet, &
         wombat%reminr, &
+        wombat%reminr_nn, &
         wombat%detremi, &
         wombat%pic2poc, &
         wombat%dissratcal, &
