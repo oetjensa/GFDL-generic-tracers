@@ -2742,8 +2742,8 @@ module generic_WOMBATlite
        
       ! emmulator shadow
       if (do_emulator_shadow) then
-        call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
-        wombat%reminr_nn(i,j,k) = min(remin_rate, (zval*mmol_m3_to_mol_kg)/dtsb)
+        call wombat_remin_point(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, det_mmolm3*mmol_m3_to_mol_kg, fe_umolm3*umol_m3_to_mol_kg, remin_rate)
+        wombat%reminr_nn(i,j,k) = min(remin_rate, (det_mmolm3*mmol_m3_to_mol_kg)/dtsb)
       endif
 
       !-----------------------------------------------------------------------!
