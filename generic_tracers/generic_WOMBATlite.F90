@@ -2184,7 +2184,7 @@ module generic_WOMBATlite
     real                                    :: phy_p, phyfe_p, pchl_p, zoo_p, det_p
     real                                    :: phy_mmolm3, zoo_mmolm3, det_mmolm3, no3_mmolm3
     real                                    :: fe_umolm3, caco3_mmolm3, phyfe_mmolm3, o2_mmolm3
-    real                                    :: fbc, zval, zval1, zval2
+    real                                    :: fbc, zval, zval1, zval2, remin_rate
     real                                    :: P_expl, k_loss
     real                                    :: k_zoodiss
     real                                    :: k_fecoag2det, fecoag2det_offset, k_dfeupt
