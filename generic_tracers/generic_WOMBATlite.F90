@@ -558,8 +558,8 @@ module generic_WOMBATlite
 
   end subroutine wombat_remin_init
 
-  subroutine wombat_remin_point(temp, o2, detr, fe, rate)
-    real(kind=8), intent(in)   :: temp, o2, detr, fe
+  subroutine wombat_remin_point(temp, o2, detr, zoos, rate)
+    real(kind=8), intent(in)   :: temp, o2, detr, zoos
     real(kind=8), intent(out)  :: rate
     type(ieee_flag_type), parameter :: trap_flags(3) = &
             [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
@@ -568,7 +568,7 @@ module generic_WOMBATlite
     remin_x1(1,1) = temp
     remin_x1(1,2) = o2  
     remin_x1(1,3) = detr
-    remin_x1(1,4) = fe 
+    remin_x1(1,4) = zoos
 
     call ieee_get_halting_mode(trap_flags, halting)
     call ieee_set_halting_mode(trap_flags, .false.)
@@ -2743,9 +2743,8 @@ module generic_WOMBATlite
       ! emmulator shadow
       if (do_emulator_shadow) then
         call wombat_remin_point(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
-                det_mmolm3*mmol_m3_to_mol_kg, fe_umolm3*umol_m3_to_mol_kg, remin_rate)
-        wombat%reminr_nn(i,j,k) = min(remin_rate, (det_mmolm3*mmol_m3_to_mol_kg)/dtsb) * &
-                mmol_m3_to_mol_kg / (det_mmolm3*mmol_m3_to_mol_kg)**2
+                det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
+        wombat%reminr_nn(i,j,k) = min(remin_rate, (det_mmolm3*mmol_m3_to_mol_kg)/dtsb) 
       endif
 
       !-----------------------------------------------------------------------!
