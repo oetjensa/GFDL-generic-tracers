@@ -113,9 +113,12 @@
 !  </DATA>
 !
 ! <DATA NAME="do_emulator_shadow" TYPE="logical">
-!  If true, evaluate emualtor alongside reminr
+!  If true, evaluate emulator alongside reminr
 ! </DATA>
 !
+! <DATA NAME="do_emulator_run" TYPE="logical">
+!  If true, use emulator to get reminr
+! </DATA>
 ! </NAMELIST>
 !
 !-----------------------------------------------------------------------
@@ -189,13 +192,14 @@ module generic_WOMBATlite
   logical :: do_check_c_conserve        = .false. ! check that the C fluxes balance in the ecosystem
   logical :: do_check_fe_conserve       = .false. ! check that the Fe fluxes balance in the ecosystem
   logical :: do_emulator_shadow         = .false. ! run emulator alongside remineralsation scheme
+  logical :: do_emulator_run            = .false. ! run emulator to replace reminr
   character(len=256) :: remin_emulator_path = ''  ! hard-code path to emulator
 
   namelist /generic_wombatlite_nml/ co2_calc, do_caco3_dynamics, do_colloidal_shunt, &
                                     do_two_ligands, do_burial, do_nitrogen_fixation, do_benthic_denitrification, &
                                     do_tracer_dicp, do_tracer_dicr, &
                                     do_check_n_conserve, do_check_c_conserve, do_check_fe_conserve, &
-                                    do_emulator_shadow, remin_emulator_path
+                                    do_emulator_shadow,do_emulator_run, remin_emulator_path
 
   !=======================================================================
   ! This type contains all the parameters and arrays used in this module
@@ -695,7 +699,7 @@ module generic_WOMBATlite
           'Checking that the ecosystem model conserves iron'
     endif
 
-    if (do_emulator_shadow) then
+    if (do_emulator_shadow .or. do_emulator_run) then
       call wombat_remin_init()
     endif
     
@@ -2737,14 +2741,23 @@ module generic_WOMBATlite
 
       ! Variable rates of remineralisation
       o2lim = max(0.0, min(1.0, 1.0 - exp(-o2_mmolm3)))
-      wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
-
+      !wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
        
       ! emmulator shadow
       if (do_emulator_shadow) then
         call wombat_remin_point(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
                 det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
-        wombat%reminr_nn(i,j,k) = min(remin_rate, (det_mmolm3*mmol_m3_to_mol_kg)/dtsb) 
+        wombat%reminr_nn(i,j,k) = min(remin_rate / (det_mmolm3**2+epsi), (det_mmolm3*mmol_m3_to_mol_kg/det_mmolm3**2+epsi)/dtsb)
+      endif
+
+      ! use emulator to run reminr (need to convert from detremi to reminr)
+      ! reminr = detremi * mmolm3_to_kg / det_mmol3**2
+      if (do_emulator_run) then    
+        call wombat_remin_point(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
+                det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
+        wombat%reminr(i,j,k) = min(remin_rate / (det_mmolm3**2+epsi), (det_mmolm3*mmol_m3_to_mol_kg/det_mmolm3**2+epsi)/dtsb)
+      else 
+        wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
       endif
 
       !-----------------------------------------------------------------------!
