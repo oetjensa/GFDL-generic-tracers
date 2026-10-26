@@ -2747,7 +2747,7 @@ module generic_WOMBATlite
       if (do_emulator_shadow) then
         call wombat_remin_point(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
                 det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
-        wombat%reminr_nn(i,j,k) = min(remin_rate / (mmol_m3_to_mol_kg*det_mmolm3**2+epsi), (det_mmolm3*mmol_m3_to_mol_kg/det_mmolm3**2+epsi)/dtsb)
+        wombat%reminr_nn(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
       endif
 
       ! use emulator to run reminr (need to convert from detremi to reminr)
@@ -2755,7 +2755,8 @@ module generic_WOMBATlite
       if (do_emulator_run) then    
         call wombat_remin_point(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
                 det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
-        wombat%reminr(i,j,k) = min(remin_rate / (mmol_m3_to_mol_kg*det_mmolm3**2+epsi), (det_mmolm3*mmol_m3_to_mol_kg/det_mmolm3**2+epsi)/dtsb)
+       ! wombat%reminr(i,j,k) = min(remin_rate / (mmol_m3_to_mol_kg*det_mmolm3**2+epsi), (det_mmolm3*mmol_m3_to_mol_kg/det_mmolm3**2+epsi)/dtsb)
+        wombat%reminr(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
       else 
         wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
       endif
