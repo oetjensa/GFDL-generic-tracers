@@ -12,14 +12,17 @@ This fork includes generic tracer implementations of the suite of [WOMBAT models
 
 ## WOMBAT_hy
 
-- use FTorch  
-  >use remin_ftorch, only: remin_ftorch_init, remin_ftorch_predict
+- use FTorch
+```Fortran
+  use remin_ftorch, only: remin_ftorch_init, remin_ftorch_predict
+```
 
 - declare logicals to switch between normal, shadow and emulator mode
-  > logical            :: use_remin_emulator    = .false.
-  > logical            :: remin_emulator_shadow = .false.
-  > character(len=256) :: remin_emulator_path   = ''
-
+ ```Fortran
+   logical            :: use_remin_emulator    = .false.
+   logical            :: remin_emulator_shadow = .false.
+   character(len=256) :: remin_emulator_path   = ''
+ ```
 - include subroutines to call NN at runtime  
   ```Fortran
   subroutine wombat_remin_init()
