@@ -4281,8 +4281,8 @@ module generic_WOMBATmid
 
   end subroutine wombat_remin_init
 
-  subroutine wombat_remin_point(temp, o2, detr, fe, rate)
-    real(kind=8), intent(in)   :: temp, o2, detr, fe
+  subroutine wombat_remin_point(temp, o2, detr, zoos, rate)
+    real(kind=8), intent(in)   :: temp, o2, detr, zoos
     real(kind=8), intent(out)  :: rate
     type(ieee_flag_type), parameter :: trap_flags(3) = &
             [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
@@ -4291,7 +4291,7 @@ module generic_WOMBATmid
     remin_x1(1,1) = temp
     remin_x1(1,2) = o2  
     remin_x1(1,3) = detr
-    remin_x1(1,4) = fe 
+    remin_x1(1,4) = zoos
 
     call ieee_get_halting_mode(trap_flags, halting)
     call ieee_set_halting_mode(trap_flags, .false.)
@@ -6271,12 +6271,12 @@ module generic_WOMBATmid
 
         ! emmulator shadow
         if (do_emulator_shadow) then
-          call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
+          call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, (biozoo+biomes)*mmol_m3_to_mol_kg, remin_rate)
           wombat%poc1remi_nn(i,j,k) = min(remin_rate, (zval*mmol_m3_to_mol_kg)/dtsb)
         endif
       else if (use_remin_emulator) then     
         ! use the emulator to predict remineralisation rate
-        call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, biofer*umol_m3_to_mol_kg, remin_rate)
+        call wombat_remin_point(Temp(i,j,k), biooxy*mmol_m3_to_mol_kg, zval*mmol_m3_to_mol_kg, (biozoo+biomes)*mmol_m3_to_mol_kg, remin_rate)
         wombat%poc1remi(i,j,k) = min(remin_rate, (zval*mmol_m3_to_mol_kg)/dtsb)
         wombat%detremi(i,j,k) = wombat%poc1remi(i,j,k) * biodet / (biodet + biobdet + epsi)
         wombat%bdetremi(i,j,k) = wombat%poc1remi(i,j,k) * biobdet / (biodet + biobdet + epsi)
