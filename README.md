@@ -1,87 +1,73 @@
-# GFDL generic tracers
 
-This is a fork of the [NOAA-GFDL/ocean_BGC](https://github.com/NOAA-GFDL/ocean_BGC) repo managed by NOAA-GFDL. It contains a collection of tracers and associated code for use with the MOM and GOLD ocean models.
+# GFDL generic tracers - **This is the development branch for WOMBAT-hy**
 
-This fork includes generic tracer implementations of the suite of [WOMBAT models](https://www.access-nri.org.au/models/model-components/biogeochemistry-model-component-ocean-wombat/) used in [ACCESS earth-system models](https://www.access-nri.org.au/models/).
+This fork is to experiment on the implementation of FTorch within WOMBAT, it contains the model code and a description of the changes made to call a Torchscript at runtime.  
+See *https://github.com/oetjensa/WOMBAT_hybrid* for more details about the experiment configuration.  
 
+This is a fork of the [NOAA-GFDL/ocean_BGC](https://github.com/NOAA-GFDL/ocean_BGC) repo managed by NOAA-GFDL. It contains a collection of tracers and associated code for use with the MOM and GOLD ocean models.  
 
-**This is the development branch for WOMBAT-hy**
-
-
-# TEST 1: Emulator shadow
-
-run emulator and bacteria in parallel
+This fork includes generic tracer implementations of the suite of [WOMBAT models](https://www.access-nri.org.au/models/model-components/biogeochemistry-model-component-ocean-wombat/) used in [ACCESS earth-system models](https://www.access-nri.org.au/models/).  
 
 
 
+## WOMBAT_hy
 
+- use FTorch  
+  >use remin_ftorch, only: remin_ftorch_init, remin_ftorch_predict
 
-# Setup PyTorch and FTorch on GADI
+- declare logicals to switch between normal, shadow and emulator mode
+  > logical            :: use_remin_emulator    = .false.
+  > logical            :: remin_emulator_shadow = .false.
+  > character(len=256) :: remin_emulator_path   = ''
 
-## PyTorch
-
-cd ftorch_model                      # create folder  \
-module purge
-module load python3/3.11.7           # load new python version \
-python3 -m venv torchvenv            # create virtual environment \
-source torchvenv/bin/activate        \
-pip install --upgrade pip            # update pip 
-
- install torch and torchvision, check for version: \
- https://pytorch.org/get-started/locally/ 
-
-pip3 install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-
-## FTorch
-https://cambridge-iccs.github.io/FTorch/page/usage/generic_example.html
-
- load same compilers used for WOMBAT (ftx) \
-module load intel-compiler-llvm/2025.2.0 gcc/12.2.0 cmake   
-         
-git clone https://github.com/Cambridge-ICCS/FTorch.git FTorch \
-mkdir build \ 
-cd build 
-
- cmake build : 
-
- https://cambridge-iccs.github.io/FTorch/page/installation/general.html \
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH=$(python -c "import torch; print(torch.utils.cmake_prefix_path)") -DCMAKE_INSTALL_PREFIX=$(cd ../.. && pwd)/FTorch_install -Wno-dev
-
-cmake --build . \
-cmake --install . 
-
- location of config file: \
-find ../../FTorch_install -name FTorchConfig.cmake 
-
-
-## Train model using PyTorch
-
-link to Jupyter notebook
-
-## Export TorchScript
-
-link Jupyter notebook, Python scripts \
-remin_emulator_ts.pt \
-cp /g/data/jk72/ao2582/PyTorch/remin_emulator_ts.pt . 
-
-
-### Test run
- fresh console, copy all files to test directory 
+- include subroutines to call NN at runtime  
+  ```Fortran
+  subroutine wombat_remin_init()
+    logical :: file_exists
  
- export DEPS=/g/data/jk72/ao2582/ACCESS/wombat_dev/ACCESS-OM3/ftorch_model 
+    if (remin_ready) return
 
-cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_Fortran_COMPILER=ifx -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_PREFIX_PATH="$DEPS/FTorch_install;$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')" -DFTorch_DIR=$DEPS/FTorch_install/lib64/cmake/FTorch -Wno-dev \
+    inquire(file=trim(remin_emulator_path), exist=file_exists)
+    if(.not. file_exists) call mpp_error(FATAL, &
+            'generic_WOMBAT_mid: emulator file not found: '//trim(remin_emulator_path))
 
-make VERBOSE=1 2>&1 | tee build_log.txt \
+    allocate(remin_x1(1, 4), remin_y1(1))
+    remin_x1 = 1.0d0  ! dummy value
+    remin_y1 = 0.0d0
+ 
+    call torch_model_load(remin_model, trim(remin_emulator_path), torch_kCPU)
+    call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
+    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
+    remin_ready = .true.
 
-./build/standin_wombat 
+  end subroutine wombat_remin_init
+  ```
+  ```Fortran  
+  subroutine wombat_remin_point(temp, o2, detr, zoo, rate)
+    real(kind=8), intent(in)   :: temp, o2, detr, zoo
+    real(kind=8), intent(out)  :: rate
+    type(ieee_flag_type), parameter :: trap_flags(3) = &
+            [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
+    logical :: halting(3)
 
-## Adjust CMakefile in gtracers 
-hard code paths to torch, ftorch 
+    remin_x1(1,1) = temp
+    remin_x1(1,2) = o2
+    remin_x1(1,3) = detr
+    remin_x1(1,4) = zoo
 
-## Changes for Runtime
+    call ieee_get_halting_mode(trap_flags, halting)
+    call ieee_set_halting_mode(trap_flags, .false.)
+    call torch_model_forward(remin_model, remin_in, remin_out)
+    call ieee_set_flag(trap_flags, .false.)
+    call ieee_set_halting_mode(trap_flags, halting)
 
- Input: set logicals, path to .pt \
- config file: Update EXE
+    rate = remin_y1(1)
+  end subroutine wombat_remin_point
+  ```
+
+- replace remineralisation rate with NN
+
+  
+
 
 
