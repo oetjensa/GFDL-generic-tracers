@@ -59,7 +59,7 @@
 !  </DEVELOPER_NOTES>
 ! </INFO>
 !
-! <NAMELIST NAME="generic_wombatlite_nml">
+! <NAMELIST NAME="generic_wombatlite_hy_nml">
 !  <DATA NAME="co2_calc" TYPE="character">
 !   Defines the carbon equiliabration method.  Default is 'mocsy' which
 !   uses the set of routines authored by J. Orr. See reference at:
@@ -123,7 +123,7 @@
 !
 !-----------------------------------------------------------------------
 
-module generic_WOMBATlite
+module generic_WOMBATlite_hy
 
   use field_manager_mod, only: fm_string_len
   use mpp_mod,           only: input_nml_file, mpp_error, FATAL, WARNING
@@ -150,26 +150,26 @@ module generic_WOMBATlite
   character(len=128) :: version = '$Id$'
   character(len=128) :: tagname = '$Name$'
 
-  character(len=fm_string_len), parameter :: mod_name     = 'generic_WOMBATlite'
-  character(len=fm_string_len), parameter :: package_name = 'generic_wombatlite'
+  character(len=fm_string_len), parameter :: mod_name     = 'generic_WOMBATlite_hy'
+  character(len=fm_string_len), parameter :: package_name = 'generic_wombatlite_hy'
 
-  public do_generic_WOMBATlite
-  public generic_WOMBATlite_register
-  public generic_WOMBATlite_init
-  public generic_WOMBATlite_register_diag
-  public generic_WOMBATlite_update_from_coupler
-  public generic_WOMBATlite_update_from_source
-  public generic_WOMBATlite_update_from_bottom
-  public generic_WOMBATlite_set_boundary_values
-  public generic_WOMBATlite_end
+  public do_generic_WOMBATlite_hy
+  public generic_WOMBATlite_hy_register
+  public generic_WOMBATlite_hy_init
+  public generic_WOMBATlite_hy_register_diag
+  public generic_WOMBATlite_hy_update_from_coupler
+  public generic_WOMBATlite_hy_update_from_source
+  public generic_WOMBATlite_hy_update_from_bottom
+  public generic_WOMBATlite_hy_set_boundary_values
+  public generic_WOMBATlite_hy_end
 
   ! The following variable for using this module is overwritten by
   ! generic_tracer_nml namelist
-  logical, save :: do_generic_WOMBATlite = .false.
+  logical, save :: do_generic_WOMBATlite_hy = .false.
 
   real, parameter :: missing_value1 = -1.0e+10
 
-  ! get ftorch ready
+  ! allocate fields for ftorch use
   logical                           :: remin_ready = .false. ! pre-run checks
   type(torch_model)                 :: remin_model
   type(torch_tensor), dimension(1)  :: remin_in, remin_out
@@ -193,18 +193,18 @@ module generic_WOMBATlite
   logical :: do_check_fe_conserve       = .false. ! check that the Fe fluxes balance in the ecosystem
   logical :: do_emulator_shadow         = .false. ! run emulator alongside remineralsation scheme
   logical :: do_emulator_run            = .false. ! run emulator to replace reminr
-  character(len=256) :: remin_emulator_path = ''  ! hard-code path to emulator
+  character(len=256) :: remin_emulator_path = ''  ! hard-code path to emulator provided through namelist
 
-  namelist /generic_wombatlite_nml/ co2_calc, do_caco3_dynamics, do_colloidal_shunt, &
+  namelist /generic_wombatlite_hy_nml/ co2_calc, do_caco3_dynamics, do_colloidal_shunt, &
                                     do_two_ligands, do_burial, do_nitrogen_fixation, do_benthic_denitrification, &
                                     do_tracer_dicp, do_tracer_dicr, &
                                     do_check_n_conserve, do_check_c_conserve, do_check_fe_conserve, &
-                                    do_emulator_shadow,do_emulator_run, remin_emulator_path
+                                    do_emulator_shadow, do_emulator_run, remin_emulator_path
 
   !=======================================================================
   ! This type contains all the parameters and arrays used in this module
   !=======================================================================
-  type generic_WOMBATlite_type
+  type generic_WOMBATlite_hy_type
     !-----------------------------------------------------------------------
     ! Configurable parameters
     !-----------------------------------------------------------------------
@@ -523,9 +523,9 @@ module generic_WOMBATlite
         id_sedco3 = -1, &
         id_sedomega_cal = -1
 
-  end type generic_WOMBATlite_type
+  end type generic_WOMBATlite_hy_type
 
-  type(generic_WOMBATlite_type), save :: wombat
+  type(generic_WOMBATlite_hy_type), save :: wombat
 
   ! An auxiliary type for storing varible names
   type, public :: vardesc
@@ -542,7 +542,8 @@ module generic_WOMBATlite
 
   contains
 
-  subroutine wombat_remin_init()
+  subroutine emulator_init()
+    ! Initialise FTorch model      
     logical :: file_exists
     
     if (remin_ready) return
@@ -560,9 +561,9 @@ module generic_WOMBATlite
     call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
     remin_ready = .true.
 
-  end subroutine wombat_remin_init
+  end subroutine emulator_init
 
-  subroutine wombat_remin_point(temp, o2, detr, zoos, rate)
+  subroutine emulator_remin(temp, o2, detr, zoos, rate)
     real(kind=8), intent(in)   :: temp, o2, detr, zoos
     real(kind=8), intent(out)  :: rate
     type(ieee_flag_type), parameter :: trap_flags(3) = &
@@ -574,6 +575,9 @@ module generic_WOMBATlite
     remin_x1(1,3) = detr
     remin_x1(1,4) = zoos
 
+    !call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
+    !call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPO)
+
     call ieee_get_halting_mode(trap_flags, halting)
     call ieee_set_halting_mode(trap_flags, .false.)
     call torch_model_forward(remin_model, remin_in, remin_out)
@@ -581,14 +585,17 @@ module generic_WOMBATlite
     call ieee_set_halting_mode(trap_flags, halting)
 
     rate = remin_y1(1)
-  end subroutine wombat_remin_point
+
+    !call torch_delete(remin_in)
+    !call torch_delete(remin_out)
+  end subroutine emulator_remin
 
 
   !#######################################################################
 
   !#######################################################################
   !
-  ! <SUBROUTINE NAME="generic_WOMBATlite_register">
+  ! <SUBROUTINE NAME="generic_WOMBATlite_hy_register">
   !  <OVERVIEW>
   !   Register the generic WOMBATlite module
   !  </OVERVIEW>
@@ -599,7 +606,7 @@ module generic_WOMBATlite
   !  </DESCRIPTION>
   !
   !  <TEMPLATE>
-  !   call generic_WOMBATlite_register(tracer_list, force_update_fluxes)
+  !   call generic_WOMBATlite_hy_register(tracer_list, force_update_fluxes)
   !  </TEMPLATE>
   !
   !  <IN NAME="tracer_list" TYPE="type(g_tracer_type), pointer">
@@ -607,13 +614,13 @@ module generic_WOMBATlite
   !  </IN>
   ! </SUBROUTINE>
   !
-  subroutine generic_WOMBATlite_register(tracer_list)
+  subroutine generic_WOMBATlite_hy_register(tracer_list)
     type(g_tracer_type), pointer, intent(in) :: tracer_list
 
     integer                                 :: ierr
     integer                                 :: io_status
     integer                                 :: stdoutunit, stdlogunit
-    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_register'
+    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_register'
     character(len=256), parameter           :: error_header = &
         '==>Error from ' // trim(mod_name) // '(' // trim(sub_name) // '): '
     character(len=256), parameter           :: warn_header =  &
@@ -626,19 +633,19 @@ module generic_WOMBATlite
     ! settings to switch tracers on and off.
     stdoutunit = stdout(); stdlogunit = stdlog()
 
-    read (input_nml_file, nml=generic_wombatlite_nml, iostat=io_status)
-    ierr = check_nml_error(io_status, 'generic_wombatlite_nml')
+    read (input_nml_file, nml=generic_wombatlite_hy_nml, iostat=io_status)
+    ierr = check_nml_error(io_status, 'generic_wombatlite_hy_nml')
 
     write (stdoutunit,'(/)')
-    write (stdoutunit, generic_wombatlite_nml)
-    write (stdlogunit, generic_wombatlite_nml)
+    write (stdoutunit, generic_wombatlite_hy_nml)
+    write (stdlogunit, generic_wombatlite_hy_nml)
 
     if (trim(co2_calc) == 'ocmip2') then
       write (stdoutunit,*) trim(note_header), 'Using FMS OCMIP2 CO2 routine'
     else if (trim(co2_calc) == 'mocsy') then
       write (stdoutunit,*) trim(note_header), 'Using Mocsy CO2 routine'
     else
-      call mpp_error(FATAL,"Unknown co2_calc option specified in generic_wombatlite_nml")
+      call mpp_error(FATAL,"Unknown co2_calc option specified in generic_wombatlite_hy_nml")
     endif
 
     if (do_caco3_dynamics) then
@@ -700,17 +707,17 @@ module generic_WOMBATlite
     endif
 
     if (do_emulator_shadow .or. do_emulator_run) then
-      call wombat_remin_init()
+      call emulator_init()
     endif
     
     ! Specify all prognostic and diagnostic tracers of this modules.
     call user_add_tracers(tracer_list)
 
-  end subroutine generic_WOMBATlite_register
+  end subroutine generic_WOMBATlite_hy_register
 
   !#######################################################################
   !
-  ! <SUBROUTINE NAME="generic_WOMBATlite_init">
+  ! <SUBROUTINE NAME="generic_WOMBATlite_hy_init">
   !  <OVERVIEW>
   !   Initialize the generic WOMBATlite module
   !  </OVERVIEW>
@@ -724,7 +731,7 @@ module generic_WOMBATlite
   !  </DESCRIPTION>
   !
   !  <TEMPLATE>
-  !   call generic_WOMBATlite_init(tracer_list, force_update_fluxes)
+  !   call generic_WOMBATlite_hy_init(tracer_list, force_update_fluxes)
   !  </TEMPLATE>
   !
   !  <IN NAME="tracer_list" TYPE="type(g_tracer_type), pointer">
@@ -739,11 +746,11 @@ module generic_WOMBATlite
   !  </IN>
   ! </SUBROUTINE>
   !
-  subroutine generic_WOMBATlite_init(tracer_list, force_update_fluxes)
+  subroutine generic_WOMBATlite_hy_init(tracer_list, force_update_fluxes)
     type(g_tracer_type), pointer, intent(in) :: tracer_list
     logical, intent(in)                      :: force_update_fluxes
 
-    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_init'
+    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_init'
 
     wombat%force_update_fluxes = force_update_fluxes
 
@@ -755,11 +762,11 @@ module generic_WOMBATlite
     ! Allocate all the private work arrays used by this module.
     call user_allocate_arrays
 
-  end subroutine generic_WOMBATlite_init
+  end subroutine generic_WOMBATlite_hy_init
 
   !#######################################################################
   !
-  ! <SUBROUTINE NAME="generic_WOMBATlite_register_diag">
+  ! <SUBROUTINE NAME="generic_WOMBATlite_hy_register_diag">
   !  <OVERVIEW>
   !   Register diagnostic fields to be used in this module.
   !  </OVERVIEW>
@@ -772,7 +779,7 @@ module generic_WOMBATlite
   !  </DESCRIPTION>
   !
   !  <TEMPLATE>
-  !   call generic_WOMBATlite_register_diag(diag_list)
+  !   call generic_WOMBATlite_hy_register_diag(diag_list)
   !  </TEMPLATE>
   !
   !  <IN NAME="g_diag_type" TYPE="type(g_diag_type), pointer">
@@ -781,7 +788,7 @@ module generic_WOMBATlite
   !  </IN>
   ! </SUBROUTINE>
   !
-  subroutine generic_WOMBATlite_register_diag(diag_list)
+  subroutine generic_WOMBATlite_hy_register_diag(diag_list)
     type(g_diag_type), pointer, intent(in) :: diag_list ! dts: this is not actually used
 
     type(vardesc)   :: vardesc_temp
@@ -1281,7 +1288,7 @@ module generic_WOMBATlite
     wombat%id_sedomega_cal = register_diag_field(package_name, vardesc_temp%name, axes(1:2), &
         init_time, vardesc_temp%longname, vardesc_temp%units, missing_value=missing_value1)
 
-  end subroutine generic_WOMBATlite_register_diag
+  end subroutine generic_WOMBATlite_hy_register_diag
 
   !#######################################################################
   !
@@ -1922,7 +1929,7 @@ module generic_WOMBATlite
 
   !#######################################################################
   !
-  ! <SUBROUTINE NAME="generic_WOMBATlite_update_from_coupler">
+  ! <SUBROUTINE NAME="generic_WOMBATlite_hy_update_from_coupler">
   !  <OVERVIEW>
   !     Modify the values obtained from the coupler if necessary.
   !  </OVERVIEW>
@@ -1935,7 +1942,7 @@ module generic_WOMBATlite
   !  </DESCRIPTION>
   !
   !  <TEMPLATE>
-  !   call generic_WOMBATlite_update_from_coupler(tracer_list)
+  !   call generic_WOMBATlite_hy_update_from_coupler(tracer_list)
   !  </TEMPLATE>
   !
   !  <IN NAME="tracer_list" TYPE="type(g_tracer_type), pointer">
@@ -1951,7 +1958,7 @@ module generic_WOMBATlite
   !  </IN>
   ! </SUBROUTINE>
   !
-  subroutine generic_WOMBATlite_update_from_coupler(tracer_list, ilb, jlb, salt_flux_added)
+  subroutine generic_WOMBATlite_hy_update_from_coupler(tracer_list, ilb, jlb, salt_flux_added)
     type(g_tracer_type), pointer, intent(in) :: tracer_list
     integer, intent(in)                      :: ilb, jlb
     real, dimension(ilb:,jlb:), intent(in)   :: salt_flux_added
@@ -1979,11 +1986,11 @@ module generic_WOMBATlite
       call g_tracer_set_values(tracer_list, 'dicp', 'stf', wombat%p_dic_stf, isd, jsd)
     endif
 
-  end subroutine generic_WOMBATlite_update_from_coupler
+  end subroutine generic_WOMBATlite_hy_update_from_coupler
 
   !#######################################################################
   !
-  ! <SUBROUTINE NAME="generic_WOMBATlite_update_from_bottom">
+  ! <SUBROUTINE NAME="generic_WOMBATlite_hy_update_from_bottom">
   !  <OVERVIEW>
   !   Set values of bottom fluxes and reservoirs
   !  </OVERVIEW>
@@ -1997,7 +2004,7 @@ module generic_WOMBATlite
   !  </DESCRIPTION>
   !
   !  <TEMPLATE>
-  !   call generic_WOMBATlite_update_from_bottom(tracer_list, dt, tau)
+  !   call generic_WOMBATlite_hy_update_from_bottom(tracer_list, dt, tau)
   !  </TEMPLATE>
   !
   !  <IN NAME="tracer_list" TYPE="type(g_tracer_type), pointer">
@@ -2013,7 +2020,7 @@ module generic_WOMBATlite
   !  </IN>
   ! </SUBROUTINE>
   !
-  subroutine generic_WOMBATlite_update_from_bottom(tracer_list, dt, tau, model_time)
+  subroutine generic_WOMBATlite_hy_update_from_bottom(tracer_list, dt, tau, model_time)
     type(g_tracer_type), pointer, intent(in) :: tracer_list
     real, intent(in)                         :: dt
     integer, intent(in)                      :: tau
@@ -2089,11 +2096,11 @@ module generic_WOMBATlite
       used = g_send_data(wombat%id_ffebury, wombat%ffebury, model_time, &
           rmask=grid_tmask(:,:,1), is_in=isc, js_in=jsc, ie_in=iec, je_in=jec)
 
-  end subroutine generic_WOMBATlite_update_from_bottom
+  end subroutine generic_WOMBATlite_hy_update_from_bottom
 
   !#######################################################################
   !
-  ! <SUBROUTINE NAME="generic_WOMBATlite_update_from_source">
+  ! <SUBROUTINE NAME="generic_WOMBATlite_hy_update_from_source">
   !  <OVERVIEW>
   !   Update tracer concentration fields due to the source/sink contributions.
   !  </OVERVIEW>
@@ -2105,7 +2112,7 @@ module generic_WOMBATlite
   !  </DESCRIPTION>
   !
   !  <TEMPLATE>
-  !   call generic_WOMBATlite_update_from_source(tracer_list, Temp, Salt, &
+  !   call generic_WOMBATlite_hy_update_from_source(tracer_list, Temp, Salt, &
   !     dzt, hblt_depth, ilb, jlb, tau, dt, grid_dat, sw_pen, opacity)
   !  </TEMPLATE>
   !
@@ -2154,7 +2161,7 @@ module generic_WOMBATlite
   !  </IN>
   !
   ! </SUBROUTINE>
-  subroutine generic_WOMBATlite_update_from_source(tracer_list, Temp, Salt,  &
+  subroutine generic_WOMBATlite_hy_update_from_source(tracer_list, Temp, Salt,  &
       rho_dzt, dzt, hblt_depth, ilb, jlb, tau, dt, grid_dat, model_time, nbands, &
       max_wavelength_band, sw_pen_band, opacity_band)
     type(g_tracer_type), pointer, intent(in)   :: tracer_list
@@ -2213,7 +2220,7 @@ module generic_WOMBATlite
     real, dimension(:,:,:,:), allocatable   :: n_pools, c_pools, fe_pools
     logical                                 :: used
 
-    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_update_from_source'
+    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_update_from_source'
     character(len=256), parameter           :: error_header = &
         '==>Error from ' // trim(mod_name) // '(' // trim(sub_name) // '): '
 
@@ -2731,7 +2738,8 @@ module generic_WOMBATlite
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
-      !  [Step 3] Heterotrophy and remineralisation                           !
+      !  [Step 3] Heterotrophy and remineralisation 
+      !           with option to replace reminr with emulator
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
@@ -2741,23 +2749,26 @@ module generic_WOMBATlite
 
       ! Variable rates of remineralisation
       o2lim = max(0.0, min(1.0, 1.0 - exp(-o2_mmolm3)))
+      ! 
       !wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
        
-      ! emmulator shadow
+      ! emulator shadow 
       if (do_emulator_shadow) then
-        call wombat_remin_point(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
+        call emulator_run(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
                 det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
-        wombat%reminr_nn(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
+        wombat%reminr_nn(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / &
+                (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
       endif
 
       ! use emulator to run reminr (need to convert from detremi to reminr)
       ! reminr = detremi * mmolm3_to_kg / det_mmol3**2
       if (do_emulator_run) then    
-        call wombat_remin_point(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
+        call emulator_run(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
                 det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
-       ! wombat%reminr(i,j,k) = min(remin_rate / (mmol_m3_to_mol_kg*det_mmolm3**2+epsi), (det_mmolm3*mmol_m3_to_mol_kg/det_mmolm3**2+epsi)/dtsb)
-        wombat%reminr(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
+        wombat%reminr(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / &
+                (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
       else 
+        ! if do_emulator=.false. this falls back to original detlrem formulation
         wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
       endif
 
@@ -3992,11 +4003,11 @@ module generic_WOMBATlite
 
     deallocate(kmeuph, k100)
 
-  end subroutine generic_WOMBATlite_update_from_source
+  end subroutine generic_WOMBATlite_hy_update_from_source
 
   !#######################################################################
   !
-  ! <SUBROUTINE NAME="generic_WOMBATlite_set_boundary_values">
+  ! <SUBROUTINE NAME="generic_WOMBATlite_hy_set_boundary_values">
   !  <OVERVIEW>
   !   Calculate and set coupler values at the surface / bottom
   !  </OVERVIEW>
@@ -4007,7 +4018,7 @@ module generic_WOMBATlite
   !  </DESCRIPTION>
   !
   !  <TEMPLATE>
-  !   call generic_WOMBATlite_set_boundary_values(tracer_list, SST, SSS, rho, ilb, jlb, tau, dzt)
+  !   call generic_WOMBATlite_hy_set_boundary_values(tracer_list, SST, SSS, rho, ilb, jlb, tau, dzt)
   !  </TEMPLATE>
   !
   !  <IN NAME="tracer_list" TYPE="type(g_tracer_type), pointer">
@@ -4039,7 +4050,7 @@ module generic_WOMBATlite
   !  </IN>
   ! </SUBROUTINE>
   !
-  subroutine generic_WOMBATlite_set_boundary_values(tracer_list, SST, SSS, rho, ilb, jlb, tau, dzt)
+  subroutine generic_WOMBATlite_hy_set_boundary_values(tracer_list, SST, SSS, rho, ilb, jlb, tau, dzt)
     type(g_tracer_type), pointer, intent(in)           :: tracer_list
     real, dimension(ilb:,jlb:), intent(in)             :: SST, SSS
     real, dimension(ilb:,jlb:,:,:), intent(in)         :: rho
@@ -4051,7 +4062,7 @@ module generic_WOMBATlite
     real                                    :: tt, tk, ts, ts2, ts3, ts4, ts5
     real                                    :: mmol_m3_to_mol_kg
     real, dimension(:,:,:), pointer         :: grid_tmask
-    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_set_boundary_values'
+    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_set_boundary_values'
 
     ! Get the necessary properties
     call g_tracer_get_common(isc, iec, jsc, jec, isd, ied, jsd, jed, nk, ntau, &
@@ -4062,7 +4073,7 @@ module generic_WOMBATlite
     ! Some unit conversion factors
     mmol_m3_to_mol_kg = 1.e-3 / wombat%Rho_0
 
-    ! nnz: Since the generic_WOMBATlite_update_from_source() subroutine is called by this time
+    ! nnz: Since the generic_WOMBATlite_hy_update_from_source() subroutine is called by this time
     ! the following if block is not really necessary (since this calculation is already done in
     ! source).
     ! It is only neccessary if source routine is commented out for debugging.
@@ -4182,11 +4193,11 @@ module generic_WOMBATlite
     call g_tracer_set_values(tracer_list, 'o2', 'csurf', wombat%o2_csurf, isd, jsd)
     call g_tracer_set_values(tracer_list, 'o2', 'sc_no', wombat%o2_sc_no, isd, jsd)
 
-  end subroutine generic_WOMBATlite_set_boundary_values
+  end subroutine generic_WOMBATlite_hy_set_boundary_values
 
   !#######################################################################
   !
-  ! <SUBROUTINE NAME="generic_WOMBATlite_end">
+  ! <SUBROUTINE NAME="generic_WOMBATlite_hy_end">
   !  <OVERVIEW>
   !   End the module.
   !  </OVERVIEW>
@@ -4196,16 +4207,16 @@ module generic_WOMBATlite
   !  </DESCRIPTION>
   !
   !  <TEMPLATE>
-  !   call generic_WOMBATlite_end
+  !   call generic_WOMBATlite_hy_end
   !  </TEMPLATE>
   ! </SUBROUTINE>
   !
-  subroutine generic_WOMBATlite_end
-    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_end'
+  subroutine generic_WOMBATlite_hy_end
+    character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_end'
 
     call user_deallocate_arrays
 
-  end subroutine generic_WOMBATlite_end
+  end subroutine generic_WOMBATlite_hy_end
 
   !#######################################################################
   !
@@ -4457,4 +4468,4 @@ module generic_WOMBATlite
 
   end subroutine user_deallocate_arrays
 
-end module generic_WOMBATlite
+end module generic_WOMBATlite_hy

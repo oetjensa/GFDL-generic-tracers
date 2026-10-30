@@ -105,6 +105,7 @@ target_sources(gtracers PRIVATE
   generic_tracers/generic_tracer_utils.F90
   generic_tracers/generic_WOMBATlite.F90
   generic_tracers/generic_WOMBATmid.F90
+  generic_tracers/generic_WOMBATlite_hy.F90 # add WOMBATlite_hy 
 )
 
 set_target_properties(gtracers PROPERTIES POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS})
