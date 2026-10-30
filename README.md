@@ -70,7 +70,14 @@ This fork includes generic tracer implementations of the suite of [WOMBAT models
 
 - replace remineralisation rate with NN
 
-  
+  ## Files to adjust
+ 
+  1. **GFDLGTracersConfig.cmake.in**  
+    - add FTorch dependency
+
+  2.  **CMakeLists.txt**    
+     - add FTorch and PyTorch paths (currently hard coded)  
+     - add genericWOMBATlite_hy.F90 to target_sources   
 
 
 
