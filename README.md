@@ -1,5 +1,5 @@
 
-# GFDL generic tracers - **This is the development branch for WOMBAT-hy**
+# GFDL generic tracers - **Development branch for WOMBAT-hy**
 
 This fork is to experiment on the implementation of FTorch within WOMBAT, it contains the model code and a description of the changes made to call a Torchscript at runtime.  
 See *https://github.com/oetjensa/WOMBAT_hybrid* for more details about the experiment configuration.  
@@ -10,7 +10,7 @@ This fork includes generic tracer implementations of the suite of [WOMBAT models
 
 
 
-## WOMBAT_hy
+## generic_WOMBATlite_hy
 
 - use FTorch
 ```Fortran
@@ -72,12 +72,15 @@ This fork includes generic tracer implementations of the suite of [WOMBAT models
 
   ## Files to adjust
  
-  1. **GFDLGTracersConfig.cmake.in**  
-    - add FTorch dependency
+1. **GFDLGTracersConfig.cmake.in**  
+    - added FTorch dependency
 
-  2.  **CMakeLists.txt**    
-     - add FTorch and PyTorch paths (currently hard coded)  
-     - add genericWOMBATlite_hy.F90 to target_sources   
+2.  **CMakeLists.txt**    
+     - added FTorch and PyTorch paths (currently hard coded)   
+     - added genericWOMBATlite_hy.F90 to target_sources  
+ 
+3. **generic_tracers, generic_tracers_utils**  
+    - added generic_WOMBATlite_hy  
 
 
 
