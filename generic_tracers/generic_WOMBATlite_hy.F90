@@ -175,6 +175,8 @@ module generic_WOMBATlite_hy
   type(torch_tensor), dimension(1)  :: remin_in, remin_out
   real(kind=8), allocatable, target :: remin_x1(:,:)  ! (1,4) inputs
   real(kind=8), allocatable, target :: remin_y1(:)    ! (1) output
+  integer                           :: ncell
+  real(kind=8), allocatable          :: temp_b(:), o2_b(:), zoos_b(:), rate_b(:)
 
   !=======================================================================
   ! Namelist Options
@@ -2785,8 +2787,8 @@ module generic_WOMBATlite_hy
       ! Batch emulator inference over valid cells only
       ! ------------------------------------------------------------------
       if (do_emulator_shadow .or. do_emulator_run) then
-        integer :: ncell
-        real(kind=8), allocatable :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
+      !  integer :: ncell
+      !  real(kind=8), allocatable :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
 
         ncell = 0
         do k = 1, nk
