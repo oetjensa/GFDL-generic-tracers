@@ -175,8 +175,6 @@ module generic_WOMBATlite_hy
   type(torch_tensor), dimension(1)  :: remin_in, remin_out
   real(kind=8), allocatable, target :: remin_x1(:,:)  ! (1,4) inputs
   real(kind=8), allocatable, target :: remin_y1(:)    ! (1) output
-  integer                           :: ncell
-  real(kind=8), allocatable          :: temp_b(:), o2_b(:), zoos_b(:), rate_b(:)
 
   !=======================================================================
   ! Namelist Options
@@ -2777,6 +2775,8 @@ module generic_WOMBATlite_hy
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
+      integer :: ii, jj, kk, ncell
+      real(kind=8), allocatable :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
 
       ! Temperature dependance of heterotrophy (applies to bact and zoo)
       fbc = wombat%bbioh ** (Temp(i,j,k))
@@ -2787,14 +2787,12 @@ module generic_WOMBATlite_hy
       ! Batch emulator inference over valid cells only
       ! ------------------------------------------------------------------
       if (do_emulator_shadow .or. do_emulator_run) then
-      !  integer :: ncell
-      !  real(kind=8), allocatable :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
 
         ncell = 0
-        do k = 1, nk
-          do j = jsc, jec
-            do i = isc, iec
-              if (k <= grid_kmt(i,j) .and. grid_tmask(i,j,k) > 0.0) then
+        do kk = 1, nk
+          do jj = jsc, jec
+            do ii = isc, iec
+              if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
                 ncell = ncell + 1
               endif
             enddo
@@ -2805,15 +2803,15 @@ module generic_WOMBATlite_hy
           allocate(temp_b(ncell), o2_b(ncell), detr_b(ncell), zoos_b(ncell), rate_b(ncell))
 
           ncell = 0
-          do k = 1, nk
-            do j = jsc, jec
-              do i = isc, iec
-                if (k <= grid_kmt(i,j) .and. grid_tmask(i,j,k) > 0.0) then
+          do kk = 1, nk
+            do jj = jsc, jec
+              do ii = isc, iec
+                if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
                   ncell = ncell + 1
-                  temp_b(ncell) = Temp(i,j,k)
-                  o2_b(ncell)   = o2_mmolm3(i,j,k) * mmol_m3_to_mol_kg
-                  detr_b(ncell) = det_mmolm3(i,j,k) * mmol_m3_to_mol_kg
-                  zoos_b(ncell) = zoo_mmolm3(i,j,k) * mmol_m3_to_mol_kg
+                  temp_b(ncell) = Temp(ii,jj,kk)
+                  o2_b(ncell)   = o2_mmolm3(ii,jj,kk) * mmol_m3_to_mol_kg
+                  detr_b(ncell) = det_mmolm3(ii,jj,kk) * mmol_m3_to_mol_kg
+                  zoos_b(ncell) = zoo_mmolm3(ii,jj,kk) * mmol_m3_to_mol_kg
                 endif
               enddo
             enddo
@@ -2822,22 +2820,22 @@ module generic_WOMBATlite_hy
           call emulator_remin_batch(temp_b, o2_b, detr_b, zoos_b, rate_b)
 
           ncell = 0
-          do k = 1, nk
-            do j = jsc, jec
-              do i = isc, iec
-                if (k <= grid_kmt(i,j) .and. grid_tmask(i,j,k) > 0.0) then
+          do kk = 1, nk
+            do jj = jsc, jec
+              do ii = isc, iec
+                if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
                   ncell = ncell + 1
 
                   if (do_emulator_shadow) then
-                    wombat%reminr_nn(i,j,k) = min(rate_b(ncell), &
-                        det_mmolm3(i,j,k) * mmol_m3_to_mol_kg / dtsb) / &
-                        (det_mmolm3(i,j,k) * mmol_m3_to_mol_kg + epsi)
+                    wombat%reminr_nn(ii,jj,kk) = min(rate_b(ncell), &
+                        det_mmolm3(ii,jj,kk) * mmol_m3_to_mol_kg / dtsb) / &
+                        (det_mmolm3(ii,jj,kk) * mmol_m3_to_mol_kg + epsi)
                   endif
 
                   if (do_emulator_run) then
-                    wombat%reminr(i,j,k) = min(rate_b(ncell), &
-                        det_mmolm3(i,j,k) * mmol_m3_to_mol_kg / dtsb) / &
-                        (det_mmolm3(i,j,k) * mmol_m3_to_mol_kg + epsi)
+                    wombat%reminr(ii,jj,kk) = min(rate_b(ncell), &
+                        det_mmolm3(ii,jj,kk) * mmol_m3_to_mol_kg / dtsb) / &
+                        (det_mmolm3(ii,jj,kk) * mmol_m3_to_mol_kg + epsi)
                   endif
                 endif
               enddo
