@@ -2253,6 +2253,7 @@ module generic_WOMBATlite_hy
     logical                                 :: used
     integer                                 :: ii, jj, kk, ncell
     real(kind=8), allocatable               :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
+    real                                    :: det_val, temp_val, o2_val, zoo_val
 
     character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_update_from_source'
     character(len=256), parameter           :: error_header = &
