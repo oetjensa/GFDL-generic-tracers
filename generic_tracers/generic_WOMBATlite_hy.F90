@@ -2251,6 +2251,8 @@ module generic_WOMBATlite_hy
     real                                    :: dzt_bot, dzt_bot_os
     real, dimension(:,:,:,:), allocatable   :: n_pools, c_pools, fe_pools
     logical                                 :: used
+    integer                                 :: ii, jj, kk, ncell
+    real(kind=8), allocatable               :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
 
     character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_update_from_source'
     character(len=256), parameter           :: error_header = &
@@ -2577,7 +2579,7 @@ module generic_WOMBATlite_hy
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
-
+    
 
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
@@ -2775,8 +2777,6 @@ module generic_WOMBATlite_hy
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
-      integer :: ii, jj, kk, ncell
-      real(kind=8), allocatable :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
 
       ! Temperature dependance of heterotrophy (applies to bact and zoo)
       fbc = wombat%bbioh ** (Temp(i,j,k))
