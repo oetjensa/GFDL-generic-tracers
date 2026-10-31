@@ -543,19 +543,22 @@ module generic_WOMBATlite_hy
   contains
 
   subroutine emulator_init()
-    ! Initialise FTorch model      
+    ! Initialise FTorch model
     logical :: file_exists
-    
+    integer :: default_batch
+
     if (remin_ready) return
 
     inquire(file=trim(remin_emulator_path), exist=file_exists)
-    if(.not. file_exists) call mpp_error(FATAL, &
-            'generic_WOMBAT_lite: emulator file not found: '//trim(remin_emulator_path))
+    if (.not. file_exists) call mpp_error(FATAL, &
+         'generic_WOMBAT_lite: emulator file not found: '//trim(remin_emulator_path))
 
-    allocate(remin_x1(1, 4), remin_y1(1))
-    remin_x1 = 1.0d0  ! dummy value
+    default_batch = 128
+
+    allocate(remin_x1(default_batch, 4), remin_y1(default_batch))
+    remin_x1 = 1.0d0
     remin_y1 = 0.0d0
-    
+
     call torch_model_load(remin_model, trim(remin_emulator_path), torch_kCPU)
     call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
     call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
@@ -563,33 +566,62 @@ module generic_WOMBATlite_hy
 
   end subroutine emulator_init
 
-  subroutine emulator_remin(temp, o2, detr, zoos, rate)
-    real(kind=8), intent(in)   :: temp, o2, detr, zoos
-    real(kind=8), intent(out)  :: rate
+  subroutine emulator_remin_batch(temp, o2, detr, zoos, rate)
+    real(kind=8), intent(in)  :: temp(:), o2(:), detr(:), zoos(:)
+    real(kind=8), intent(out) :: rate(size(temp))
+    integer :: n, i
     type(ieee_flag_type), parameter :: trap_flags(3) = &
             [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
     logical :: halting(3)
 
-    remin_x1(1,1) = temp
-    remin_x1(1,2) = o2  
-    remin_x1(1,3) = detr
-    remin_x1(1,4) = zoos
+    n = size(temp)
+    if (n <= 0) return
 
-    !call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
-    !call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPO)
+    if (.not. allocated(remin_x1) .or. size(remin_x1,1) < n) then
+      if (allocated(remin_x1)) deallocate(remin_x1)
+      if (allocated(remin_y1)) deallocate(remin_y1)
+      allocate(remin_x1(n, 4), remin_y1(n))
+    endif
+
+    remin_x1 = 1.0d0
+    remin_y1 = 0.0d0
+
+    do i = 1, n
+      remin_x1(i,1) = temp(i)
+      remin_x1(i,2) = o2(i)
+      remin_x1(i,3) = detr(i)
+      remin_x1(i,4) = zoos(i)
+    enddo
 
     call ieee_get_halting_mode(trap_flags, halting)
     call ieee_set_halting_mode(trap_flags, .false.)
+    call torch_tensor_from_array(remin_in(1), remin_x1(1:n,:), torch_kCPU)
+    call torch_tensor_from_array(remin_out(1), remin_y1(1:n), torch_kCPU)
     call torch_model_forward(remin_model, remin_in, remin_out)
     call ieee_set_flag(trap_flags, .false.)
     call ieee_set_halting_mode(trap_flags, halting)
 
-    rate = remin_y1(1)
+    do i = 1, n
+      rate(i) = remin_y1(i)
+    enddo
 
-    !call torch_delete(remin_in)
-    !call torch_delete(remin_out)
+  end subroutine emulator_remin_batch
+
+  subroutine emulator_remin(temp, o2, detr, zoos, rate)
+    real(kind=8), intent(in)  :: temp, o2, detr, zoos
+    real(kind=8), intent(out) :: rate
+    real(kind=8) :: tempv(1), o2v(1), detrv(1), zoosv(1), ratev(1)
+
+    tempv(1) = temp
+    o2v(1)   = o2
+    detrv(1) = detr
+    zoosv(1) = zoos
+
+    call emulator_remin_batch(tempv, o2v, detrv, zoosv, ratev)
+
+    rate = ratev(1)
+
   end subroutine emulator_remin
-
 
   !#######################################################################
 
@@ -2749,28 +2781,97 @@ module generic_WOMBATlite_hy
 
       ! Variable rates of remineralisation
       o2lim = max(0.0, min(1.0, 1.0 - exp(-o2_mmolm3)))
+            ! ------------------------------------------------------------------
+      ! Batch emulator inference over valid cells only
+      ! ------------------------------------------------------------------
+      if (do_emulator_shadow .or. do_emulator_run) then
+        integer :: ncell
+        real(kind=8), allocatable :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
+
+        ncell = 0
+        do k = 1, nk
+          do j = jsc, jec
+            do i = isc, iec
+              if (k <= grid_kmt(i,j) .and. grid_tmask(i,j,k) > 0.0) then
+                ncell = ncell + 1
+              endif
+            enddo
+          enddo
+        enddo
+
+        if (ncell > 0) then
+          allocate(temp_b(ncell), o2_b(ncell), detr_b(ncell), zoos_b(ncell), rate_b(ncell))
+
+          ncell = 0
+          do k = 1, nk
+            do j = jsc, jec
+              do i = isc, iec
+                if (k <= grid_kmt(i,j) .and. grid_tmask(i,j,k) > 0.0) then
+                  ncell = ncell + 1
+                  temp_b(ncell) = Temp(i,j,k)
+                  o2_b(ncell)   = o2_mmolm3(i,j,k) * mmol_m3_to_mol_kg
+                  detr_b(ncell) = det_mmolm3(i,j,k) * mmol_m3_to_mol_kg
+                  zoos_b(ncell) = zoo_mmolm3(i,j,k) * mmol_m3_to_mol_kg
+                endif
+              enddo
+            enddo
+          enddo
+
+          call emulator_remin_batch(temp_b, o2_b, detr_b, zoos_b, rate_b)
+
+          ncell = 0
+          do k = 1, nk
+            do j = jsc, jec
+              do i = isc, iec
+                if (k <= grid_kmt(i,j) .and. grid_tmask(i,j,k) > 0.0) then
+                  ncell = ncell + 1
+
+                  if (do_emulator_shadow) then
+                    wombat%reminr_nn(i,j,k) = min(rate_b(ncell), &
+                        det_mmolm3(i,j,k) * mmol_m3_to_mol_kg / dtsb) / &
+                        (det_mmolm3(i,j,k) * mmol_m3_to_mol_kg + epsi)
+                  endif
+
+                  if (do_emulator_run) then
+                    wombat%reminr(i,j,k) = min(rate_b(ncell), &
+                        det_mmolm3(i,j,k) * mmol_m3_to_mol_kg / dtsb) / &
+                        (det_mmolm3(i,j,k) * mmol_m3_to_mol_kg + epsi)
+                  endif
+                endif
+              enddo
+            enddo
+          enddo
+
+          deallocate(temp_b, o2_b, detr_b, zoos_b, rate_b)
+        endif
+      endif
+     
+      if (.not. do_emulator_run) then
+        wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
+      endif
+
       ! 
       !wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
        
       ! emulator shadow 
-      if (do_emulator_shadow) then
-        call emulator_remin(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
-                det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
-        wombat%reminr_nn(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / &
-                (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
-      endif
+      !if (do_emulator_shadow) then
+      !  call emulator_remin(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
+       !         det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
+       ! wombat%reminr_nn(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / &
+       !         (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
+      !endif
 
       ! use emulator to run reminr (need to convert from detremi to reminr)
       ! reminr = detremi * mmolm3_to_kg / det_mmol3**2
-      if (do_emulator_run) then    
-        call emulator_remin(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
-                det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
-        wombat%reminr(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / &
-                (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
-      else 
-        ! if do_emulator=.false. this falls back to original detlrem formulation
-        wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
-      endif
+      !if (do_emulator_run) then    
+      !  call emulator_remin(Temp(i,j,k), o2_mmolm3*mmol_m3_to_mol_kg, &
+      !          det_mmolm3*mmol_m3_to_mol_kg, zoo_mmolm3*mmol_m3_to_mol_kg, remin_rate)
+      !  wombat%reminr(i,j,k) = min(remin_rate, det_mmolm3*mmol_m3_to_mol_kg/dtsb) / &
+      !          (det_mmolm3**2*mmol_m3_to_mol_kg+epsi)
+      !else 
+       ! ! if do_emulator=.false. this falls back to original detlrem formulation
+       ! wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
+      !endif
 
       !-----------------------------------------------------------------------!
       !-----------------------------------------------------------------------!
