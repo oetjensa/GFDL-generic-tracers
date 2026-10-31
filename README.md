@@ -12,65 +12,15 @@ This fork includes generic tracer implementations of the suite of [WOMBAT models
 
 ## generic_WOMBATlite_hy
 
-- use FTorch
-```Fortran
-  use remin_ftorch, only: remin_ftorch_init, remin_ftorch_predict
-```
+*this will be updated once code development is finalised*
 
-- declare logicals to switch between normal, shadow and emulator mode
- ```Fortran
-   logical            :: use_remin_emulator    = .false.
-   logical            :: remin_emulator_shadow = .false.
-   character(len=256) :: remin_emulator_path   = ''
- ```
-- include subroutines to call NN at runtime  
-  ```Fortran
-  subroutine wombat_remin_init()
-    logical :: file_exists
- 
-    if (remin_ready) return
+1. use FTorch  
+2. declare logicals to switch between normal, shadow and emulator mode  
+3. include subroutines to call NN at runtime  
+4. replace remineralisation rate with emulator, call emulator in batches
+   
 
-    inquire(file=trim(remin_emulator_path), exist=file_exists)
-    if(.not. file_exists) call mpp_error(FATAL, &
-            'generic_WOMBAT_mid: emulator file not found: '//trim(remin_emulator_path))
-
-    allocate(remin_x1(1, 4), remin_y1(1))
-    remin_x1 = 1.0d0  ! dummy value
-    remin_y1 = 0.0d0
- 
-    call torch_model_load(remin_model, trim(remin_emulator_path), torch_kCPU)
-    call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
-    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
-    remin_ready = .true.
-
-  end subroutine wombat_remin_init
-  ```
-  ```Fortran  
-  subroutine wombat_remin_point(temp, o2, detr, zoo, rate)
-    real(kind=8), intent(in)   :: temp, o2, detr, zoo
-    real(kind=8), intent(out)  :: rate
-    type(ieee_flag_type), parameter :: trap_flags(3) = &
-            [ieee_invalid, ieee_overflow, ieee_divide_by_zero]
-    logical :: halting(3)
-
-    remin_x1(1,1) = temp
-    remin_x1(1,2) = o2
-    remin_x1(1,3) = detr
-    remin_x1(1,4) = zoo
-
-    call ieee_get_halting_mode(trap_flags, halting)
-    call ieee_set_halting_mode(trap_flags, .false.)
-    call torch_model_forward(remin_model, remin_in, remin_out)
-    call ieee_set_flag(trap_flags, .false.)
-    call ieee_set_halting_mode(trap_flags, halting)
-
-    rate = remin_y1(1)
-  end subroutine wombat_remin_point
-  ```
-
-- replace remineralisation rate with NN
-
-  ## Files to adjust
+## Other files to edit
  
 1. **GFDLGTracersConfig.cmake.in**  
     - added FTorch dependency
