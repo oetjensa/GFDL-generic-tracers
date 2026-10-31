@@ -2251,9 +2251,9 @@ module generic_WOMBATlite_hy
     real                                    :: dzt_bot, dzt_bot_os
     real, dimension(:,:,:,:), allocatable   :: n_pools, c_pools, fe_pools
     logical                                 :: used
-    integer                                 :: ii, jj, kk, ncell
+    integer                                 :: ii, jj, kk, ncell, nvalid, nmax
     real(kind=8), allocatable               :: temp_b(:), o2_b(:), detr_b(:), zoos_b(:), rate_b(:)
-    real                                    :: det_val, temp_val, o2_val, zoo_val
+    integer, allocatable                    :: i_b(:), j_b(:), k_b(:)
 
     character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_update_from_source'
     character(len=256), parameter           :: error_header = &
@@ -2547,6 +2547,28 @@ module generic_WOMBATlite_hy
     call g_tracer_get_pointer(tracer_list, 'fe', 'field', wombat%p_fe) ! [mol/kg]
     if (do_tracer_dicr) call g_tracer_get_pointer(tracer_list, 'dicr', 'field', wombat%p_dicr) ! [mol/kg]
 
+    if (do_emulator_shadow .or. do_emulator_run) then
+      nmax = (iec - isc + 1) * (jec - jsc + 1) * nk
+      allocate(temp_b(nmax), o2_b(nmax), detr_b(nmax), zoos_b(nmax), rate_b(nmax))
+      allocate(i_b(nmax), j_b(nmax), k_b(nmax))
+
+      nvalid = 0
+      do kk = 1, nk
+        do jj = jsc, jec
+          do ii = isc, iec
+            if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
+              nvalid = nvalid + 1
+              i_b(nvalid) = ii
+              j_b(nvalid) = jj
+              k_b(nvalid) = kk
+            endif
+          enddo
+        enddo
+      enddo
+    else
+      nvalid = 0
+    endif
+
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
@@ -2711,6 +2733,41 @@ module generic_WOMBATlite_hy
       c_pools(:,:,:,1) = c_pools(:,:,:,2)
       fe_pools(:,:,:,1) = fe_pools(:,:,:,2)
 
+      if (do_emulator_shadow .or. do_emulator_run) then
+        do ncell = 1, nvalid
+          ii = i_b(ncell)
+          jj = j_b(ncell)
+          kk = k_b(ncell)
+          temp_b(ncell) = Temp(ii,jj,kk)
+          o2_b(ncell)   = max(0.0, wombat%p_o2(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
+          detr_b(ncell) = max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
+          zoos_b(ncell) = max(0.0, wombat%p_zoo(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
+        enddo
+
+        if (nvalid > 0) then
+          call emulator_remin_batch(temp_b(1:nvalid), o2_b(1:nvalid), &
+              detr_b(1:nvalid), zoos_b(1:nvalid), rate_b(1:nvalid))
+
+          do ncell = 1, nvalid
+            ii = i_b(ncell)
+            jj = j_b(ncell)
+            kk = k_b(ncell)
+
+            if (do_emulator_shadow) then
+              wombat%reminr_nn(ii,jj,kk) = min(rate_b(ncell), &
+                  max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg / dtsb) / &
+                  (max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg + epsi)
+            endif
+
+            if (do_emulator_run) then
+              wombat%reminr(ii,jj,kk) = min(rate_b(ncell), &
+                  max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg / dtsb) / &
+                  (max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg + epsi)
+            endif
+          enddo
+        endif
+      endif
+
       do k = 1,nk; do j = jsc,jec; do i = isc,iec;
 
       ! Initialise some floored values and ratios (put into nicer units than mol/kg)
@@ -2785,74 +2842,6 @@ module generic_WOMBATlite_hy
       ! Variable rates of remineralisation
       o2lim = max(0.0, min(1.0, 1.0 - exp(-o2_mmolm3)))
       
-      ! ------------------------------------------------------------------
-      ! Batch emulator inference over valid cells only
-      ! ------------------------------------------------------------------
-      if (do_emulator_shadow .or. do_emulator_run) then
-      ncell = 0
-        do kk = 1, nk
-          do jj = jsc, jec
-            do ii = isc, iec
-              if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
-                ncell = ncell + 1
-                temp_b(ncell) = temp_val
-                o2_b(ncell)   = o2_val
-                detr_b(ncell) = det_val
-                zoos_b(ncell) = zoo_val
-              endif
-            enddo
-          enddo
-        enddo
-
-        if (ncell > 0) then
-          allocate(temp_b(ncell), o2_b(ncell), detr_b(ncell), zoos_b(ncell), rate_b(ncell))
-
-          ! Fill arrays
-          ncell = 0
-          do kk = 1, nk
-            do jj = jsc, jec
-              do ii = isc, iec
-                if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
-                  ncell = ncell + 1
-                  temp_b(ncell) = Temp(ii,jj,kk)
-                  o2_b(ncell)   = max(0.0, wombat%p_o2(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
-                  detr_b(ncell) = max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
-                  zoos_b(ncell) = max(0.0, wombat%p_zoo(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
-                endif
-              enddo
-            enddo
-          enddo
-
-          call emulator_remin_batch(temp_b, o2_b, detr_b, zoos_b, rate_b)
-
-          ncell = 0
-          do kk = 1, nk
-            do jj = jsc, jec
-              do ii = isc, iec
-                if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
-                  ncell = ncell + 1
-
-                  if (do_emulator_shadow) then
-                    wombat%reminr_nn(ii,jj,kk) = min(rate_b(ncell), &
-                        max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg / dtsb) / &
-                        (max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg + epsi)
-                  endif
-
-                  if (do_emulator_run) then
-                    wombat%reminr(ii,jj,kk) = min(rate_b(ncell), &
-                        max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg / dtsb) / &
-                        (max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg + epsi)
-                  endif
-                endif
-              enddo
-            enddo
-          enddo
-
-          deallocate(temp_b, o2_b, detr_b, zoos_b, rate_b)
-        endif
-      endif
-   
-     
       if (.not. do_emulator_run) then
         wombat%reminr(i,j,k) = wombat%detlrem * fbc * o2lim
       endif
@@ -4110,6 +4099,9 @@ module generic_WOMBATlite_hy
           rmask=grid_tmask(:,:,1), is_in=isc, js_in=jsc, ie_in=iec, je_in=jec)
 
     deallocate(kmeuph, k100)
+    if (do_emulator_shadow .or. do_emulator_run) then
+      deallocate(temp_b, o2_b, detr_b, zoos_b, rate_b, i_b, j_b, k_b)
+    endif
 
   end subroutine generic_WOMBATlite_hy_update_from_source
 
