@@ -2784,7 +2784,8 @@ module generic_WOMBATlite_hy
 
       ! Variable rates of remineralisation
       o2lim = max(0.0, min(1.0, 1.0 - exp(-o2_mmolm3)))
-            ! ------------------------------------------------------------------
+      
+      ! ------------------------------------------------------------------
       ! Batch emulator inference over valid cells only
       ! ------------------------------------------------------------------
       if (do_emulator_shadow .or. do_emulator_run) then
@@ -2793,13 +2794,6 @@ module generic_WOMBATlite_hy
           do jj = jsc, jec
             do ii = isc, iec
               if (kk <= grid_kmt(ii,jj) .and. grid_tmask(ii,jj,kk) > 0.0) then
-                temp_val = Temp(ii,jj,kk)
-
-                ! These are scalar values for this cell, not arrays
-                o2_val  = max(0.0, wombat%p_o2(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
-                det_val = max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
-                zoo_val = max(0.0, wombat%p_zoo(ii,jj,kk,tau)) / mmol_m3_to_mol_kg
-
                 ncell = ncell + 1
                 temp_b(ncell) = temp_val
                 o2_b(ncell)   = o2_val
@@ -2813,7 +2807,7 @@ module generic_WOMBATlite_hy
         if (ncell > 0) then
           allocate(temp_b(ncell), o2_b(ncell), detr_b(ncell), zoos_b(ncell), rate_b(ncell))
 
-          ! Reuse the same values in the batch, or fill them in a separate loop if you prefer
+          ! Fill arrays
           ncell = 0
           do kk = 1, nk
             do jj = jsc, jec
