@@ -577,10 +577,10 @@ module generic_WOMBATlite_hy
     n = size(temp)
     if (n <= 0) return
 
-    if (.not. allocated(remin_x1) .or. size(remin_x1,1) < n) then
+    if (.not. allocated(remin_x1) .or. size(remin_x1,1) < n .or. size(remin_x1,2) /= 4) then
       if (allocated(remin_x1)) deallocate(remin_x1)
       if (allocated(remin_y1)) deallocate(remin_y1)
-      allocate(remin_x1(n, 4), remin_y1(n))
+      allocate(remin_x1(n,4), remin_y1(n))
     endif
 
     remin_x1 = 1.0d0
@@ -595,8 +595,8 @@ module generic_WOMBATlite_hy
 
     call ieee_get_halting_mode(trap_flags, halting)
     call ieee_set_halting_mode(trap_flags, .false.)
-    call torch_tensor_from_array(remin_in(1), remin_x1(1:n,:), torch_kCPU)
-    call torch_tensor_from_array(remin_out(1), remin_y1(1:n), torch_kCPU)
+    call torch_tensor_from_array(remin_in(1), remin_x1, torch_kCPU)
+    call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
     call torch_model_forward(remin_model, remin_in, remin_out)
     call ieee_set_flag(trap_flags, .false.)
     call ieee_set_halting_mode(trap_flags, halting)
