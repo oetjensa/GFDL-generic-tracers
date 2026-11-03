@@ -126,7 +126,8 @@
 module generic_WOMBATlite_hy
 
   use field_manager_mod, only: fm_string_len
-  use mpp_mod,           only: input_nml_file, mpp_error, FATAL, WARNING
+  use mpp_mod,           only: input_nml_file, mpp_error, FATAL, WARNING, mpp_pe, mpp_root_pe
+  use wombat_timer,      only: wombat_timer_type, wombat_timers_enabled
   use fms_mod,           only: write_version_number, check_nml_error, stdout, stdlog
   use time_manager_mod,  only: time_type
   use constants_mod,     only: WTMCO2, WTMO2
@@ -178,6 +179,10 @@ module generic_WOMBATlite_hy
   real(kind=8), allocatable, target :: remin_x1(:,:)  ! (1,4) inputs
   real(kind=8), allocatable, target :: remin_y1(:)    ! (1) output
   integer                           :: remin_batch_size = 0
+
+  ! Emulator profiling timers. Enabled at run time with the environment variable
+  ! WOMBAT_TIMERS=1 (read in emulator_init); reported once in generic_WOMBATlite_hy_end.
+  type(wombat_timer_type) :: t_update, t_prep, t_gather, t_alias, t_forward, t_scatter
   logical                           :: remin_traps_saved = .false.
   logical                           :: remin_traps_disabled = .false.
   logical                           :: remin_halting(3)
@@ -553,8 +558,19 @@ module generic_WOMBATlite_hy
   subroutine emulator_init()
     ! Initialise FTorch model
     logical :: file_exists
+    character(len=8) :: timers_env
+    integer :: env_len, env_stat
 
     if (remin_ready) return
+
+    call get_environment_variable('WOMBAT_TIMERS', timers_env, env_len, env_stat)
+    wombat_timers_enabled = (env_stat == 0 .and. env_len > 0 .and. timers_env(1:1) == '1')
+    call t_update%init('update_from_source (total)')
+    call t_prep%init('emulator: valid-cell setup')
+    call t_gather%init('emulator: gather inputs')
+    call t_alias%init('emulator: remin_out alias')
+    call t_forward%init('emulator: torch_model_forward')
+    call t_scatter%init('emulator: scatter rate')
 
     inquire(file=trim(remin_emulator_path), exist=file_exists)
     if (.not. file_exists) call mpp_error(FATAL, &
@@ -595,8 +611,12 @@ module generic_WOMBATlite_hy
 
     ! FTorch move-assigns inference results into the output tensor, so recreate
     ! this alias before each call to keep remin_y1 connected to the result.
+    call t_alias%start()
     call torch_tensor_from_array(remin_out(1), remin_y1, torch_kCPU)
+    call t_alias%stop()
+    call t_forward%start()
     call torch_model_forward(remin_model, remin_in, remin_out)
+    call t_forward%stop()
 
   end subroutine emulator_remin_batch
 
@@ -2276,6 +2296,8 @@ module generic_WOMBATlite_hy
     character(len=256), parameter           :: error_header = &
         '==>Error from ' // trim(mod_name) // '(' // trim(sub_name) // '): '
 
+    call t_update%start()
+
     call g_tracer_get_common(isc, iec, jsc, jec, isd, ied, jsd, jed, nk, ntau, &
         grid_tmask=grid_tmask, grid_kmt=grid_kmt)
 
@@ -2564,6 +2586,7 @@ module generic_WOMBATlite_hy
     call g_tracer_get_pointer(tracer_list, 'fe', 'field', wombat%p_fe) ! [mol/kg]
     if (do_tracer_dicr) call g_tracer_get_pointer(tracer_list, 'dicr', 'field', wombat%p_dicr) ! [mol/kg]
 
+    call t_prep%start()
     if (do_emulator_shadow .or. do_emulator_run) then
       nvalid = 0
       do kk = 1, nk
@@ -2595,6 +2618,7 @@ module generic_WOMBATlite_hy
     else
       nvalid = 0
     endif
+    call t_prep%stop()
 
     !-----------------------------------------------------------------------!
     !-----------------------------------------------------------------------!
@@ -2764,6 +2788,7 @@ module generic_WOMBATlite_hy
       fe_pools(:,:,:,1) = fe_pools(:,:,:,2)
 
       if (do_emulator_shadow .or. do_emulator_run) then
+        call t_gather%start()
         do ncell = 1, nvalid
           ii = i_b(ncell)
           jj = j_b(ncell)
@@ -2773,10 +2798,12 @@ module generic_WOMBATlite_hy
           remin_x1(ncell,3) = max(0.0, wombat%p_det(ii,jj,kk,tau)) !/ mmol_m3_to_mol_kg
           remin_x1(ncell,4) = max(0.0, wombat%p_zoo(ii,jj,kk,tau)) !/ mmol_m3_to_mol_kg
         enddo
+        call t_gather%stop()
 
         if (nvalid > 0) then
           call emulator_remin_batch()
 
+          call t_scatter%start()
           do ncell = 1, nvalid
             ii = i_b(ncell)
             jj = j_b(ncell)
@@ -2802,6 +2829,7 @@ module generic_WOMBATlite_hy
                !    (max(0.0, wombat%p_det(ii,jj,kk,tau)) / mmol_m3_to_mol_kg + epsi)
             endif
           enddo
+          call t_scatter%stop()
         endif
       endif
 
@@ -4143,6 +4171,8 @@ module generic_WOMBATlite_hy
       if (nvalid > 0) deallocate(i_b, j_b, k_b)
     endif
 
+    call t_update%stop()
+
   end subroutine generic_WOMBATlite_hy_update_from_source
 
   !#######################################################################
@@ -4353,6 +4383,21 @@ module generic_WOMBATlite_hy
   !
   subroutine generic_WOMBATlite_hy_end
     character(len=fm_string_len), parameter :: sub_name = 'generic_WOMBATlite_hy_end'
+    integer :: tunit
+
+    if (wombat_timers_enabled .and. mpp_pe() == mpp_root_pe()) then
+      tunit = stdout()
+      write(tunit, '(/,a)') 'WOMBATlite_hy emulator timers (root PE, wall-clock seconds / microseconds per call)'
+      write(tunit, '(2x,a32,a12,a10,3a12,a)') 'timer', 'total [s]', 'calls', 'mean [us]', 'min [us]', 'max [us]', '  % of update'
+      call t_update%report(tunit)
+      call t_prep%report(tunit,    t_update%total)
+      call t_gather%report(tunit,  t_update%total)
+      call t_alias%report(tunit,   t_update%total)
+      call t_forward%report(tunit, t_update%total)
+      call t_scatter%report(tunit, t_update%total)
+      write(tunit, '(a,/)') 'note: calls = ts_npzd sub-steps x model steps; each call batches all valid cells on this PE.'
+    endif
+
     call torch_tensor_delete(remin_in)
     call torch_tensor_delete(remin_out)
 
